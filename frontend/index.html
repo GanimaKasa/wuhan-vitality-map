@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>武汉城市活力地图</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css?v=3" />
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>武汉城市活力地图</h1>
+    <p class="subtitle">基于8模态多模态模型的三环内250m格网活力预测（原型demo）</p>
+
+    <section class="panel">
+      <label for="periodSelect">时段</label>
+      <select id="periodSelect"></select>
+      <label class="checkbox-row">
+        <input id="fillToggle" type="checkbox" />
+        仅显示格网边界（隐藏填充色）
+      </label>
+      <label class="checkbox-row">
+        <input id="borderToggle" type="checkbox" />
+        隐藏格网边界（连边框也不显示）
+      </label>
+    </section>
+
+    <section class="panel">
+      <label for="districtInput">按行政区搜索</label>
+      <input id="districtInput" type="text" placeholder="如：武昌区" list="districtList" />
+      <datalist id="districtList"></datalist>
+      <div class="btn-row">
+        <button id="topHighBtn">活力最高Top10</button>
+        <button id="topLowBtn">活力最低Top10</button>
+        <button id="clearFilterBtn">清除筛选</button>
+      </div>
+      <div id="searchResultInfo" class="hint"></div>
+    </section>
+
+    <section class="panel">
+      <label for="weiboSearchInput">微博热点搜索（语义检索，真实文本已脱敏）</label>
+      <input id="weiboSearchInput" type="text" placeholder="如：武汉旅游" />
+      <label for="weiboTopNInput" class="weibo-topn-label">按点赞数取前N条展示</label>
+      <input id="weiboTopNInput" type="number" min="1" max="2000" value="150" />
+      <div class="btn-row">
+        <button id="weiboSearchBtn">搜索</button>
+        <button id="weiboClearBtn">清除标记</button>
+      </div>
+      <div id="weiboSearchInfo" class="hint"></div>
+      <div id="weiboResultList" class="weibo-result-list"></div>
+    </section>
+
+    <section class="panel chat-panel">
+      <label>大语言模型问答（已接入DeepSeek）</label>
+      <div id="chatMessages"></div>
+      <div class="chat-input-row">
+        <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样" />
+        <button id="chatSendBtn">发送</button>
+      </div>
+    </section>
+  </aside>
+
+  <main id="mapContainer"></main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js?v=4"></script>
+</body>
+</html>

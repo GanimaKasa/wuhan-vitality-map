@@ -1,0 +1,161 @@
+:root {
+  --sidebar-bg: #1b1f27;
+  --sidebar-fg: #e7e9ee;
+  --accent: #4393c3;
+  --accent-hot: #d6604d;
+  --panel-bg: #242a35;
+  --border: #333a47;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; font-family: "Microsoft YaHei", "Segoe UI", sans-serif; }
+
+#app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+#sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+#sidebar h1 { font-size: 18px; margin: 0 0 4px; }
+.subtitle { font-size: 12px; color: #9aa3b2; margin: 0 0 8px; line-height: 1.5; }
+
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel label { font-size: 12px; color: #9aa3b2; }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox-row input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+
+select, input[type="text"] {
+  background: #10141a;
+  border: 1px solid var(--border);
+  color: var(--sidebar-fg);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+select:focus, input[type="text"]:focus { border-color: var(--accent); }
+
+.btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+button {
+  background: #2c3444;
+  color: var(--sidebar-fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+button:hover { background: var(--accent); border-color: var(--accent); }
+
+.hint { font-size: 12px; color: #7d879a; min-height: 16px; }
+
+.chat-panel { flex: 1; min-height: 260px; }
+
+#chatMessages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+  min-height: 150px;
+  max-height: 340px;
+}
+
+.msg { padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+.msg.user { background: var(--accent); color: white; align-self: flex-end; }
+.msg.bot { background: #2c3444; align-self: flex-start; }
+
+.chat-input-row { display: flex; gap: 6px; }
+.chat-input-row input { flex: 1; }
+
+#mapContainer { flex: 1; height: 100%; }
+
+/* Leaflet popup 内容 */
+.grid-popup { font-size: 12.5px; line-height: 1.6; min-width: 220px; }
+.grid-popup h3 { margin: 0 0 6px; font-size: 13.5px; }
+.gate-bar-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.gate-bar-label { width: 64px; font-size: 11px; color: #555; flex-shrink: 0; }
+.gate-bar-track { display: inline-block; flex: 1; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+.gate-bar-fill { display: inline-block; height: 100%; background: var(--accent); vertical-align: top; }
+.missing-badge { display: inline-block; background: #d6604d; color: white; font-size: 10px; padding: 1px 6px; border-radius: 10px; margin-right: 4px; }
+
+.weibo-topn-label { margin-top: 4px; }
+#weiboTopNInput { width: 100px; }
+
+.weibo-result-list {
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.weibo-item {
+  background: #10141a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.weibo-item:hover { border-color: var(--accent); }
+.weibo-item .weibo-meta { color: #7d879a; font-size: 11px; margin-bottom: 4px; }
+.weibo-item .weibo-text { color: var(--sidebar-fg); white-space: pre-wrap; }
+
+.grid-popup .weibo-activity-btn {
+  margin-top: 8px;
+  width: 100%;
+}
+.grid-popup .activity-summary {
+  margin-top: 8px;
+  padding: 8px;
+  background: #f0f4f8;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.grid-popup .activity-sample { font-size: 11px; color: #666; margin-top: 4px; }
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --sidebar-bg: #f4f5f7;
+    --sidebar-fg: #1b1f27;
+    --panel-bg: #ffffff;
+    --border: #d8dce3;
+  }
+  select, input[type="text"] { background: #ffffff; color: #1b1f27; }
+  button { background: #eef1f6; color: #1b1f27; }
+  .msg.bot { background: #eef1f6; }
+  .weibo-item { background: #ffffff; }
+}
