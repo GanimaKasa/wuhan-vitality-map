@@ -108,20 +108,35 @@ document.addEventListener("click", async (e) => {
   }
 });
 
+// 颜色映射统一用"全部10个时段"合在一起算的分位数范围（而不是每次切换时段各自
+// 用当前时段的min/max归一化），这样颜色深浅才能真实反映跨时段的绝对活力高低——
+// 否则同一个格网哪怕日间活力远高于夜间，切换时段后颜色可能看起来差不多甚至更淡。
+let GLOBAL_COLOR_MIN = 0;
+let GLOBAL_COLOR_MAX = 1;
+
+function computeGlobalColorRange() {
+  const all = [];
+  for (const feat of geojsonData.features) {
+    for (const col of LABEL_COLS) {
+      all.push(feat.properties[`pred_${col}`]);
+    }
+  }
+  all.sort((a, b) => a - b);
+  const pct = (p) => all[Math.min(all.length - 1, Math.floor(p * (all.length - 1)))];
+  GLOBAL_COLOR_MIN = pct(0.02);
+  GLOBAL_COLOR_MAX = pct(0.98);
+}
+
 function renderMarkers() {
   if (markerLayer) map.removeLayer(markerLayer);
   markerByGridId.clear();
-
-  const values = geojsonData.features.map((f) => f.properties[`pred_${currentPeriod}`]);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
 
   markerLayer = L.layerGroup();
   for (const feat of geojsonData.features) {
     const [lng, lat] = feat.geometry.coordinates;
     const props = feat.properties;
     const value = props[`pred_${currentPeriod}`];
-    const color = valueToColor(value, min, max);
+    const color = valueToColor(value, GLOBAL_COLOR_MIN, GLOBAL_COLOR_MAX);
     const bounds = [
       [lat - HALF_LAT, lng - HALF_LNG],
       [lat + HALF_LAT, lng + HALF_LNG],
@@ -304,6 +319,7 @@ async function main() {
 
   const res = await fetch("/api/geojson");
   geojsonData = await res.json();
+  computeGlobalColorRange();
   renderMarkers();
 
   document.getElementById("topHighBtn").addEventListener("click", () => runTopSearch("desc"));
