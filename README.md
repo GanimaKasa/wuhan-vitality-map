@@ -77,8 +77,11 @@ docker run -p 8000:8000 wuhan-vitality-map
 
 `原始数据\微博数据\mblogs.csv`（187855条原始记录）经 `weibo_export.py` 离线处理后接入网站，做两个功能：
 
-- **语义检索**（侧边栏"微博热点搜索"面板）：`GET /api/weibo/search?keyword=xxx&top_n=150`。用本地embedding模型（`BAAI/bge-small-zh-v1.5`，`weibo_embed.py`离线算好的`weibo_embeddings.npy`）把查询文本编码成向量，和全部帖子向量算余弦相似度，相似度≥`WEIBO_SIMILARITY_THRESHOLD`（`app.py`里定义，当前0.5）的算候选池——**不再依赖字面关键词匹配**，"黎黄陂路真好玩"这种没提"旅游"两个字但语义相关的帖子也能被搜到。候选池内按`点赞数`（`like_count`）降序取前`top_n`条展示（默认150，前端"按点赞数取前N条展示"输入框可调）。这个接口纯本地计算，不调用DeepSeek，不受限流影响。
-  - 效果实测：对"武汉旅游""美食"这类具体名词召回质量很好；对"夜生活"这类抽象复合词，小模型的语义精度有限，候选池会混入一些字面沾边但语义不太相关的内容——如果后续觉得不够准，可以把`app.py`里`WEIBO_EMBED_MODEL_NAME`换成更大的模型（如`bge-base-zh-v1.5`），代价是离线编码和查询都会变慢。
+- **语义检索**（侧边栏"微博热点搜索"面板）：`GET /api/weibo/search?keyword=xxx&top_n=150`。查询文本和全部9.7万条帖子的embedding都调用**SiliconFlow embeddings API**（`https://api.siliconflow.cn/v1/embeddings`，模型`BAAI/bge-large-zh-v1.5`，1024维）算，离线索引向量由`weibo_embed.py`预先批量算好存入`weibo_embeddings.npy`，查询时`app.py`用同一个API+模型实时算查询向量，两边保证在同一向量空间。算出相似度≥`WEIBO_SIMILARITY_THRESHOLD`（`app.py`里定义，当前0.5）的算候选池——**不再依赖字面关键词匹配**，"黎黄陂路真好玩"这种没提"旅游"两个字但语义相关的帖子也能被搜到。候选池内按`点赞数`（`like_count`）降序取前`top_n`条展示（默认150，前端"按点赞数取前N条展示"输入框可调）。这个接口不调用DeepSeek，不受`/api/chat`那套限流影响，但会受SiliconFlow自身的调用频率限制。
+  - **为什么不在本地/Render上跑embedding模型**：本地PyTorch+transformers光加载就要吃掉800MB+内存，超过Render免费档512MB上限；改用云端API后部署环境不用装torch，内存占用降到200MB以内。
+  - **为什么查询和离线索引必须用同一个API+模型，不能"本地模型+云端API混用"**：踩过坑——最早想查询时调用免费的HuggingFace Inference API、离线索引用本地`sentence-transformers`算，两边"模型名一样"但返回的向量完全不在同一空间（HuggingFace免费接口返回未经池化的逐token向量，本地库有自己的池化逻辑），导致搜索结果是完全不相关的垃圾数据。所以必须两边都调同一个SiliconFlow接口。
+  - **SiliconFlow需要账户有余额**：即使是非Pro的基础版embedding模型，账户余额为0时调用会报"参数无效"这种和真实原因不符的错误（实际是余额不足），需要先充值（几块钱即可，9.7万条文本全部编码一次的成本很低）。
+  - `weibo_embed.py`支持断点续跑：调用SiliconFlow API处理9.7万条文本耗时较长且偶尔会超时/被限流，脚本每处理3200条自动落一次盘（`weibo_embeddings.npy.checkpoint.npy`+`.progress.txt`），中途中断重新运行会自动从上次进度继续，全部完成后自动清理这两个临时文件。
 - **地区活动解读**（格网弹窗里的"查看该地区微博动态"按钮）：`GET /api/weibo/grid/{grid_id}`，统计该格网内微博的地点类型分布，抽样几条文本，用 `llm_client.summarize_grid_activity()` 生成一段"这里的人在干什么"的自然语言解读。这个接口调用DeepSeek，复用`/api/chat`的每IP限流保护。
 
 **隐私处理**：`weibo_export.py` 保留 `微博文本`、经纬度、`grid_id`、`地点类型`、`发布时间`、`点赞量`（公开互动指标，不识别用户身份），丢弃了原始数据里的用户ID/粉丝数/关注数/性别/注册地/转发量/评论量等一切可识别用户身份的字段。网站任何地方都不会展示这些被丢弃的字段。

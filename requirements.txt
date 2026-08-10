@@ -5,7 +5,6 @@ pydantic>=2.0
 requests>=2.31
 python-dotenv>=1.0
 numpy>=1.24
-# 注意：这里故意不装 sentence-transformers/torch —— 部署环境(Render免费档512MB)装不下，
-# 查询时的embedding改成调HuggingFace Inference API远程算（见 backend/app.py 的
-# _embed_query_via_hf）。sentence-transformers只有离线脚本 backend/weibo_embed.py
-# 需要，那个脚本在本地机器上单独跑，需要的话本地额外 pip install sentence-transformers。
+# 注意：这里没有sentence-transformers/torch —— 微博语义检索的embedding（包括离线批量
+# 计算 backend/weibo_embed.py 和在线查询 backend/app.py）都改成调用SiliconFlow云端
+# embeddings API，不需要本地跑模型，部署环境(Render免费档512MB)也能轻松装下。

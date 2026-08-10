@@ -2,3 +2,6 @@ backend/.env
 backend/__pycache__/
 __pycache__/
 *.pyc
+*.log
+backend/data/*.checkpoint.npy
+backend/data/*.progress.txt
