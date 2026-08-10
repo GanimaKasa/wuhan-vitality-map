@@ -215,7 +215,11 @@ def weibo_search(keyword: str, top_n: int = 150):
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"语义检索服务暂时不可用，请稍后再试。（{e}）")
 
-    similarities = WEIBO_EMBEDDINGS.astype(np.float32) @ query_vec
+    # 注意：不要把WEIBO_EMBEDDINGS(float16,9.7万行)整体转float32——那会在每次请求时
+    # 临时多分配约190MB内存，在Render免费档512MB内存上很容易把进程冲爆(502)。
+    # 反过来把很小的query_vec转成float16去匹配，只需要几KB。
+    similarities = WEIBO_EMBEDDINGS @ query_vec.astype(np.float16)
+    similarities = similarities.astype(np.float32)
 
     candidate_mask = similarities >= WEIBO_SIMILARITY_THRESHOLD
     candidates = WEIBO_DF[candidate_mask].copy()
