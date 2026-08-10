@@ -9,14 +9,14 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 
-import llm_client
+import llm_client  # 导入时会load_dotenv()，读取.env里的DEEPSEEK_API_KEY/HF_TOKEN
 import retrieval
 
 # /api/chat 限流：每IP每分钟最多CHAT_RATE_LIMIT次，防止公网调用真实LLM API被刷爆费用。
@@ -45,11 +45,37 @@ WEIBO_JSON_PATH = os.path.join(BASE_DIR, "data", "weibo_posts.json")
 WEIBO_EMBEDDINGS_PATH = os.path.join(BASE_DIR, "data", "weibo_embeddings.npy")
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
 
-# 与 weibo_embed.py 用同一个模型名，保证查询向量和离线索引向量在同一空间里
+# 与 weibo_embed.py 用同一个模型名，保证查询向量和离线索引向量在同一空间里。
+# 部署环境（Render免费档512MB内存）装不下本地PyTorch+transformers（光加载就要吃掉800MB+），
+# 所以查询文本的embedding改成调用HuggingFace官方免费的Inference API远程算，
+# 离线批量算索引向量（weibo_embed.py）仍然在本地机器上跑，两边模型一致，向量空间兼容。
 WEIBO_EMBED_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
+HF_INFERENCE_URL = f"https://api-inference.huggingface.co/models/{WEIBO_EMBED_MODEL_NAME}"
+HF_TOKEN = os.environ.get("HF_TOKEN")
 # 语义相关性阈值：低于此余弦相似度的帖子不算入候选池。
 # 针对bge-small-zh-v1.5在这批微博短文本上的相似度分布实测校准得出，见任务10验证记录。
 WEIBO_SIMILARITY_THRESHOLD = 0.5
+
+
+def _embed_query_via_hf(text: str) -> np.ndarray:
+    """调HuggingFace Inference API算查询文本的embedding，失败时抛异常由调用方处理"""
+    if not HF_TOKEN:
+        raise RuntimeError("未配置HF_TOKEN环境变量，无法调用HuggingFace Inference API")
+    resp = requests.post(
+        HF_INFERENCE_URL,
+        headers={"Authorization": f"Bearer {HF_TOKEN}"},
+        json={"inputs": text, "options": {"wait_for_model": True}},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    vec = np.array(resp.json(), dtype=np.float32)
+    # 有些模型返回[1, dim]或按token返回[seq_len, dim]，统一压成单个句向量
+    while vec.ndim > 1:
+        vec = vec.mean(axis=0)
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+    return vec
 
 app = FastAPI(title="武汉城市活力地图")
 app.add_middleware(
@@ -79,8 +105,6 @@ WEIBO_DF["post_time"] = WEIBO_DF["post_time"].astype(object).where(WEIBO_DF["pos
 
 WEIBO_EMBEDDINGS = np.load(WEIBO_EMBEDDINGS_PATH)
 assert len(WEIBO_EMBEDDINGS) == len(WEIBO_DF), "weibo_embeddings.npy行数与weibo_posts.json条数不一致，需要重新跑weibo_embed.py"
-# 单条查询文本编码用CPU足够快，避免和本机GTX1650(4GB)上其他程序抢显存
-WEIBO_EMBED_MODEL = SentenceTransformer(WEIBO_EMBED_MODEL_NAME, device="cpu")
 
 
 class ChatRequest(BaseModel):
@@ -181,13 +205,17 @@ WEIBO_POST_COLS = ["text", "lng", "lat", "grid_id", "place_type", "post_time", "
 @app.get("/api/weibo/search")
 def weibo_search(keyword: str, top_n: int = 150):
     """
-    语义向量检索：查询文本编码后与全部帖子embedding做余弦相似度，
-    相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不再靠字面关键词匹配，
-    也不再受固定关键词数量限制）；候选池内按like_count（点赞数）降序取前top_n条。
-    不调用DeepSeek，纯本地embedding计算，不受_check_rate_limit限流。
+    语义向量检索：查询文本经HuggingFace Inference API编码后与全部帖子embedding算
+    余弦相似度，相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不再靠字面关键词
+    匹配，也不再受固定关键词数量限制）；候选池内按like_count（点赞数）降序取前top_n条。
+    不调用DeepSeek，不受_check_rate_limit限流，但会受HuggingFace免费API自身的频率限制。
     """
-    query_vec = WEIBO_EMBED_MODEL.encode([keyword], normalize_embeddings=True, convert_to_numpy=True)[0]
-    similarities = WEIBO_EMBEDDINGS @ query_vec
+    try:
+        query_vec = _embed_query_via_hf(keyword)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"语义检索服务暂时不可用，请稍后再试。（{e}）")
+
+    similarities = WEIBO_EMBEDDINGS.astype(np.float32) @ query_vec
 
     candidate_mask = similarities >= WEIBO_SIMILARITY_THRESHOLD
     candidates = WEIBO_DF[candidate_mask].copy()
