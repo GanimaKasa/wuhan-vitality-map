@@ -59,6 +59,19 @@ SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
 # 针对bge-large-zh-v1.5在这批微博短文本上的相似度分布实测校准得出。
 WEIBO_SIMILARITY_THRESHOLD = 0.5
 
+# 二阶段cross-encoder重排序：bi-encoder(embedding)召回的候选池里，query和document
+# 是分别独立编码再比向量，两者在模型内部从未"见过面"，排序精度有限（高赞但字面
+# 沾边的帖子容易靠点赞数挤到前面）。reranker模型把query和每条候选文本拼在一起
+# 一次性输入，做联合attention后打一个直接的相关性分数，精度明显更高，是2025-2026
+# 生产级RAG系统的标配二阶段。SiliconFlow提供Cohere兼容的/v1/rerank接口，同一账号
+# 直接可用，不需要额外引入服务商或本地模型。
+WEIBO_RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+SILICONFLOW_RERANK_URL = "https://api.siliconflow.cn/v1/rerank"
+# reranker是逐对query-document做联合推理，比embedding的向量点积慢得多，不能对
+# 整个候选池（可能上万条）都跑一遍。先按初筛分数（相似度×log点赞数）取前
+# RERANK_POOL_SIZE名做精排候选，其余仍按初筛分数接在精排结果后面。
+RERANK_POOL_SIZE = 50
+
 
 def _embed_query(text: str) -> np.ndarray:
     """调SiliconFlow embeddings API算查询文本的embedding，失败时抛异常由调用方处理"""
@@ -76,6 +89,21 @@ def _embed_query(text: str) -> np.ndarray:
     if norm > 0:
         vec = vec / norm
     return vec
+
+
+def _rerank_scores(query: str, documents: list[str]) -> list[float]:
+    """调SiliconFlow rerank API给query-document对打联合相关性分数，按documents原始顺序返回分数列表"""
+    resp = requests.post(
+        SILICONFLOW_RERANK_URL,
+        headers={"Authorization": f"Bearer {SILICONFLOW_API_KEY}"},
+        json={"model": WEIBO_RERANK_MODEL_NAME, "query": query, "documents": documents},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    scores = [0.0] * len(documents)
+    for item in resp.json()["results"]:
+        scores[item["index"]] = item["relevance_score"]
+    return scores
 
 app = FastAPI(title="武汉城市活力地图")
 app.add_middleware(
@@ -205,11 +233,14 @@ WEIBO_POST_COLS = ["text", "lng", "lat", "grid_id", "place_type", "post_time", "
 @app.get("/api/weibo/search")
 def weibo_search(keyword: str, top_n: int = 150):
     """
-    语义向量检索：查询文本经SiliconFlow embeddings API编码后与全部帖子embedding算
-    余弦相似度，相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不再靠字面关键词
-    匹配，也不再受固定关键词数量限制）。候选池内按综合分数排序取前top_n条：
-    分数 = 相似度 × log(1+点赞数)。
-    不纯按点赞数排，避免"只是很火但其实不太相关"的帖子靠人气霸榜挤掉真正贴题的内容。
+    语义向量检索，两阶段：
+    1. 召回：查询文本经SiliconFlow embeddings API编码后与全部帖子embedding算余弦相似度，
+       相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不靠字面关键词匹配）。候选池
+       内先按初筛分数（相似度×log(1+点赞数)）排序，避免"很火但不太相关"的帖子靠人气
+       霸榜，取前RERANK_POOL_SIZE名进入精排。
+    2. 精排：query和候选文本一起送SiliconFlow rerank API（cross-encoder联合attention），
+       按真实相关性分数重新排序；候选池里没进精排的其余帖子仍按初筛分数接在后面。
+    精排调用失败（如未触发限流之外的异常）会静默降级为只用初筛分数排序，不影响整体检索可用性。
     不调用DeepSeek，不受_check_rate_limit限流，但会受SiliconFlow API自身的频率限制。
     """
     try:
@@ -230,8 +261,20 @@ def weibo_search(keyword: str, top_n: int = 150):
     total_relevant = len(candidates)
 
     candidates["score"] = candidates["similarity"] * np.log1p(candidates["like_count"])
+    candidates = candidates.sort_values("score", ascending=False)
 
-    top = candidates.sort_values("score", ascending=False).head(top_n)
+    shortlist_n = min(RERANK_POOL_SIZE, len(candidates))
+    shortlist = candidates.head(shortlist_n).copy()
+    rest = candidates.iloc[shortlist_n:]
+
+    try:
+        rerank_scores = _rerank_scores(keyword, shortlist["text"].tolist())
+        shortlist["score"] = rerank_scores
+        shortlist = shortlist.sort_values("score", ascending=False)
+    except Exception as e:
+        print(f"重排序失败，降级为仅用初筛分数排序：{e}", flush=True)
+
+    top = pd.concat([shortlist, rest]).head(top_n)
 
     return {
         "total_relevant": total_relevant,
