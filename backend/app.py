@@ -68,9 +68,12 @@ WEIBO_SIMILARITY_THRESHOLD = 0.5
 WEIBO_RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 SILICONFLOW_RERANK_URL = "https://api.siliconflow.cn/v1/rerank"
 # reranker是逐对query-document做联合推理，比embedding的向量点积慢得多，不能对
-# 整个候选池（可能上万条）都跑一遍。先按初筛分数（相似度×log点赞数）取前
-# RERANK_POOL_SIZE名做精排候选，其余仍按初筛分数接在精排结果后面。
-RERANK_POOL_SIZE = 50
+# 整个候选池（可能上万条）都跑一遍。精排范围要覆盖实际展示的top_n条，否则
+# 展示列表里排在精排范围之外的部分会退回到"相似度×点赞数"初筛排序，让高赞但
+# 弱相关的帖子重新露出来（之前设成固定50条时，top_n=150的默认展示第51~150名
+# 全部漏了精排，就是这么踩的坑）。RERANK_MAX_CANDIDATES是防止极端大top_n请求
+# 单次调用文档数过多的安全上限，超过这个上限的尾部才退回初筛排序。
+RERANK_MAX_CANDIDATES = 200
 
 
 def _embed_query(text: str) -> np.ndarray:
@@ -237,7 +240,7 @@ def weibo_search(keyword: str, top_n: int = 150):
     1. 召回：查询文本经SiliconFlow embeddings API编码后与全部帖子embedding算余弦相似度，
        相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不靠字面关键词匹配）。候选池
        内先按初筛分数（相似度×log(1+点赞数)）排序，避免"很火但不太相关"的帖子靠人气
-       霸榜，取前RERANK_POOL_SIZE名进入精排。
+       霸榜，取前min(top_n, RERANK_MAX_CANDIDATES)名进入精排（覆盖实际展示条数）。
     2. 精排：query和候选文本一起送SiliconFlow rerank API（cross-encoder联合attention），
        按真实相关性分数重新排序；候选池里没进精排的其余帖子仍按初筛分数接在后面。
     精排调用失败（如未触发限流之外的异常）会静默降级为只用初筛分数排序，不影响整体检索可用性。
@@ -263,7 +266,7 @@ def weibo_search(keyword: str, top_n: int = 150):
     candidates["score"] = candidates["similarity"] * np.log1p(candidates["like_count"])
     candidates = candidates.sort_values("score", ascending=False)
 
-    shortlist_n = min(RERANK_POOL_SIZE, len(candidates))
+    shortlist_n = min(top_n, len(candidates), RERANK_MAX_CANDIDATES)
     shortlist = candidates.head(shortlist_n).copy()
     rest = candidates.iloc[shortlist_n:]
 
