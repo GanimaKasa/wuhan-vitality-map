@@ -237,7 +237,7 @@ function renderWeiboResults(data) {
   weiboMarkerLayer.addTo(map);
 
   document.getElementById("weiboSearchInfo").textContent =
-    `语义检索到 ${data.total_relevant} 条相关微博，按点赞数展示前 ${data.returned} 条`;
+    `语义检索到 ${data.total_relevant} 条相关微博，按相关度+热度综合排序展示前 ${data.returned} 条`;
 }
 
 async function weiboSearch() {

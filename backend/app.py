@@ -207,7 +207,9 @@ def weibo_search(keyword: str, top_n: int = 150):
     """
     语义向量检索：查询文本经SiliconFlow embeddings API编码后与全部帖子embedding算
     余弦相似度，相似度超过WEIBO_SIMILARITY_THRESHOLD的算作候选池（不再靠字面关键词
-    匹配，也不再受固定关键词数量限制）；候选池内按like_count（点赞数）降序取前top_n条。
+    匹配，也不再受固定关键词数量限制）。候选池内按综合分数排序取前top_n条：
+    分数 = 相似度 × log(1+点赞数)。
+    不纯按点赞数排，避免"只是很火但其实不太相关"的帖子靠人气霸榜挤掉真正贴题的内容。
     不调用DeepSeek，不受_check_rate_limit限流，但会受SiliconFlow API自身的频率限制。
     """
     try:
@@ -226,7 +228,10 @@ def weibo_search(keyword: str, top_n: int = 150):
     candidates["similarity"] = similarities[candidate_mask]
 
     total_relevant = len(candidates)
-    top = candidates.sort_values("like_count", ascending=False).head(top_n)
+
+    candidates["score"] = candidates["similarity"] * np.log1p(candidates["like_count"])
+
+    top = candidates.sort_values("score", ascending=False).head(top_n)
 
     return {
         "total_relevant": total_relevant,
