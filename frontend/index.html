@@ -57,7 +57,7 @@
     </details>
 
     <details class="panel collapsible-panel">
-      <summary class="panel-summary">📡 微博热点（语义搜索 · 全部POI）</summary>
+      <summary class="panel-summary">📡 微博热点搜索（语义检索）</summary>
       <div class="panel-body">
         <div class="panel-subsection">
           <label for="weiboSearchInput">微博热点搜索（语义检索，真实文本已脱敏）</label>
@@ -75,7 +75,12 @@
           <div id="weiboSearchInfo" class="hint"></div>
           <div id="weiboResultList" class="weibo-result-list"></div>
         </div>
+      </div>
+    </details>
 
+    <details class="panel collapsible-panel">
+      <summary class="panel-summary">📍 全部微博POI（类别 · 点赞筛选）</summary>
+      <div class="panel-body">
         <div class="panel-subsection">
           <label class="checkbox-row">
             <input id="allPoiToggle" type="checkbox" />
@@ -107,6 +112,6 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
