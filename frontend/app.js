@@ -349,6 +349,10 @@ function populatePoiCategorySelect(posts) {
   const counts = new Map();
   for (const p of posts) {
     const key = p.place_type || "（未知类型）";
+    // 极少数帖子的place_type是未映射到中文名的原始数字编码（如"88"“247”），
+    // 只有几十条，属于上游数据脏值，不作为可选类别展示（不影响这些帖子本身
+    // 在地图上显示，只是筛选下拉框里不单独列出这个噪声类别）。
+    if (/^\d+$/.test(key)) continue;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
