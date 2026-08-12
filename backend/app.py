@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -112,6 +113,8 @@ app = FastAPI(title="武汉城市活力地图")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+# 全量POI接口一次性传约9MB JSON，开GZip压缩能大幅减小实际传输体积，减轻Render免费档带宽压力。
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 with open(GEOJSON_PATH, encoding="utf-8") as f:
     _GEOJSON = json.load(f)
@@ -136,6 +139,12 @@ WEIBO_DF["post_time"] = WEIBO_DF["post_time"].astype(object).where(WEIBO_DF["pos
 
 WEIBO_EMBEDDINGS = np.load(WEIBO_EMBEDDINGS_PATH)
 assert len(WEIBO_EMBEDDINGS) == len(WEIBO_DF), "weibo_embeddings.npy行数与weibo_posts.json条数不一致，需要重新跑weibo_embed.py"
+
+# 全量POI地图浏览用的轻量字段列表，启动时算一次存着，避免每次请求都重新from_dict转换
+# 9.7万行。不带原文（隐私+体积考虑，9.7万条全文会让单次响应膨胀到近30MB），点位详情
+# 复用已有的/api/weibo/grid/{grid_id}按需拉取。
+ALL_POI_LIGHT_COLS = ["lng", "lat", "grid_id", "place_type", "like_count"]
+ALL_POI_LIGHT = WEIBO_DF[ALL_POI_LIGHT_COLS].to_dict(orient="records")
 
 
 class ChatRequest(BaseModel):
@@ -284,6 +293,15 @@ def weibo_search(keyword: str, top_n: int = 150):
         "returned": len(top),
         "posts": top[WEIBO_POST_COLS + ["similarity"]].to_dict(orient="records"),
     }
+
+
+@app.get("/api/weibo/all_pois")
+def get_all_pois():
+    """
+    全量微博POI点位（轻量字段：经纬度/格网/类别/点赞数，不含原文），供地图"全部POI"
+    浏览模式一次性拉取后前端聚合渲染+按类别/点赞数纯前端筛选，不受_check_rate_limit限流。
+    """
+    return {"count": len(ALL_POI_LIGHT), "posts": ALL_POI_LIGHT}
 
 
 @app.get("/api/weibo/grid/{grid_id}")

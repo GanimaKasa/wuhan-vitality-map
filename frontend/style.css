@@ -114,6 +114,19 @@ button:hover { background: var(--accent); border-color: var(--accent); }
 
 .hint { font-size: 12px; color: #7d879a; min-height: 16px; }
 
+.hidden { display: none; }
+
+.all-poi-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+#poiCategorySelect { font-size: 12px; }
+input[type="range"] { accent-color: var(--accent); width: 100%; }
+
 .chat-panel { flex: 1; min-height: 260px; }
 
 #chatMessages {

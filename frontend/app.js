@@ -23,6 +23,8 @@ let markerByGridId = new Map();
 let markerLayer = null;
 let weiboMarkerLayer = null;
 let lastWeiboData = null; // {total_relevant, returned, posts}——切换排序时对这份数据纯前端重排，不重新请求后端
+let allPoiData = null; // {count, posts}——全部微博POI轻量数据，只在首次开启开关时拉取一次并缓存
+let allPoiClusterLayer = null;
 let currentPeriod = LABEL_COLS[2]; // 默认工作日_日间
 let fillHidden = false;   // true时不填充颜色
 let borderHidden = false; // true时连边框也不显示
@@ -272,6 +274,91 @@ async function weiboSearch() {
   }
 }
 
+function poiPopupHtml(post) {
+  const placeType = escapeHtml(post.place_type || "未知类型");
+  return `<div class="grid-popup"><b>格网 #${post.grid_id}</b>（${placeType}） · ❤${post.like_count}
+    <button class="weibo-activity-btn" data-grid-id="${post.grid_id}">查看该地区微博动态</button>
+    <div class="activity-container" id="activity-container-${post.grid_id}"></div>
+  </div>`;
+}
+
+function populatePoiCategorySelect(posts) {
+  const counts = new Map();
+  for (const p of posts) {
+    const key = p.place_type || "（未知类型）";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const sel = document.getElementById("poiCategorySelect");
+  sel.innerHTML = "";
+  for (const [name, count] of sorted) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = `${name} (${count})`;
+    sel.appendChild(opt);
+  }
+}
+
+function getSelectedPoiCategories() {
+  const sel = document.getElementById("poiCategorySelect");
+  return [...sel.selectedOptions].map((o) => o.value);
+}
+
+function renderAllPoiLayer() {
+  if (!allPoiData) return;
+  if (allPoiClusterLayer) map.removeLayer(allPoiClusterLayer);
+
+  const selectedCategories = getSelectedPoiCategories();
+  const minLikes = Number(document.getElementById("poiLikeThresholdInput").value) || 0;
+
+  allPoiClusterLayer = L.markerClusterGroup({ chunkedLoading: true });
+  let shown = 0;
+  for (const post of allPoiData.posts) {
+    if (post.like_count < minLikes) continue;
+    const category = post.place_type || "（未知类型）";
+    if (selectedCategories.length && !selectedCategories.includes(category)) continue;
+    const marker = L.circleMarker([post.lat, post.lng], {
+      radius: 4,
+      color: "#ffffff",
+      weight: 1,
+      fillColor: "#4393c3",
+      fillOpacity: 0.85,
+    });
+    marker.bindPopup(() => poiPopupHtml(post));
+    allPoiClusterLayer.addLayer(marker);
+    shown++;
+  }
+  allPoiClusterLayer.addTo(map);
+
+  document.getElementById("allPoiInfo").textContent =
+    `共 ${allPoiData.count} 条POI，当前筛选展示 ${shown} 条`;
+}
+
+async function loadAllPois() {
+  document.getElementById("allPoiInfo").textContent = "加载中（首次加载约9MB，请稍候）...";
+  try {
+    const res = await fetch("/api/weibo/all_pois");
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById("allPoiInfo").textContent = data.detail || "加载失败，请稍后再试。";
+      return;
+    }
+    allPoiData = data;
+    populatePoiCategorySelect(data.posts);
+
+    let maxLikes = 0;
+    for (const p of data.posts) if (p.like_count > maxLikes) maxLikes = p.like_count;
+    const slider = document.getElementById("poiLikeThresholdInput");
+    slider.max = maxLikes;
+    slider.value = 0;
+    document.getElementById("poiLikeThresholdValue").textContent = "0";
+
+    renderAllPoiLayer();
+  } catch {
+    document.getElementById("allPoiInfo").textContent = "加载失败，请稍后再试。";
+  }
+}
+
 async function initDistrictList() {
   const res = await fetch("/api/districts");
   const { districts } = await res.json();
@@ -352,6 +439,28 @@ async function main() {
   document.getElementById("weiboClearBtn").addEventListener("click", clearWeiboResults);
   document.getElementById("weiboSortByLikesToggle").addEventListener("change", () => {
     if (lastWeiboData) renderWeiboResults();
+  });
+  document.getElementById("allPoiToggle").addEventListener("change", async (e) => {
+    const controls = document.getElementById("allPoiControls");
+    if (e.target.checked) {
+      controls.classList.remove("hidden");
+      if (allPoiData) {
+        renderAllPoiLayer();
+      } else {
+        await loadAllPois();
+      }
+    } else {
+      controls.classList.add("hidden");
+      if (allPoiClusterLayer) {
+        map.removeLayer(allPoiClusterLayer);
+        allPoiClusterLayer = null;
+      }
+    }
+  });
+  document.getElementById("poiCategorySelect").addEventListener("change", renderAllPoiLayer);
+  document.getElementById("poiLikeThresholdInput").addEventListener("input", (e) => {
+    document.getElementById("poiLikeThresholdValue").textContent = e.target.value;
+    renderAllPoiLayer();
   });
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {

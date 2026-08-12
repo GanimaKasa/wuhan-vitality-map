@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>武汉城市活力地图</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="style.css?v=4" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+<link rel="stylesheet" href="style.css?v=5" />
 </head>
 <body>
 <div id="app">
@@ -58,6 +60,20 @@
       </label>
       <div id="weiboSearchInfo" class="hint"></div>
       <div id="weiboResultList" class="weibo-result-list"></div>
+
+      <div class="panel-subsection">
+        <label class="checkbox-row">
+          <input id="allPoiToggle" type="checkbox" />
+          显示全部微博POI（首次开启会拉取全量点位，约9.7万条，地图上聚合展示）
+        </label>
+        <div id="allPoiControls" class="all-poi-controls hidden">
+          <label for="poiCategorySelect">按类别筛选（不选=全部类别）</label>
+          <select id="poiCategorySelect" multiple size="6"></select>
+          <label for="poiLikeThresholdInput">最低点赞数：<span id="poiLikeThresholdValue">0</span></label>
+          <input id="poiLikeThresholdInput" type="range" min="0" max="0" value="0" />
+          <div id="allPoiInfo" class="hint"></div>
+        </div>
+      </div>
     </section>
 
     <section class="panel chat-panel">
@@ -74,6 +90,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js?v=6"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
