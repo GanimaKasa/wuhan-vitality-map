@@ -198,6 +198,69 @@ function initPeriodSelect() {
   });
 }
 
+function todayDateStr() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// 按查询日期的工作日/休息日属性，自动把时段选择器切到对应的组（保留原来选的
+// 时段档位，如深夜/日间/夜间；工作日和休息日各自独有的档位如"早高峰"vs"早间"
+// 没有直接对应，找不到就退回该组第一档）。
+function switchPeriodPrefix(isWorkday) {
+  const targetPrefix = isWorkday ? "工作日" : "休息日";
+  const currentPrefix = currentPeriod.startsWith("工作日") ? "工作日" : "休息日";
+  if (currentPrefix === targetPrefix) return;
+  const suffix = currentPeriod.slice(currentPrefix.length);
+  const candidate = targetPrefix + suffix;
+  currentPeriod = LABEL_COLS.includes(candidate) ? candidate : LABEL_COLS.find((c) => c.startsWith(targetPrefix));
+  document.getElementById("periodSelect").value = currentPeriod;
+  renderMarkers();
+}
+
+async function queryCalendarAndWeather() {
+  const dateStr = document.getElementById("calendarDateInput").value;
+  if (!dateStr) return;
+  const resultEl = document.getElementById("calendarResult");
+  resultEl.textContent = "查询中...";
+
+  let dayTypeHtml = "";
+  let weatherHtml = "";
+
+  try {
+    const res = await fetch(`/api/calendar/day_type?date_str=${dateStr}`);
+    const data = await res.json();
+    if (res.ok) {
+      const cls = data.is_workday ? "workday" : "restday";
+      dayTypeHtml = `<span class="calendar-badge ${cls}">${data.label}</span>` +
+        (data.note ? `<div class="calendar-note">${escapeHtml(data.note)}</div>` : "");
+      switchPeriodPrefix(data.is_workday);
+    } else {
+      dayTypeHtml = `<div class="calendar-note">${escapeHtml(data.detail || "查询失败")}</div>`;
+    }
+  } catch {
+    dayTypeHtml = '<div class="calendar-note">日期类型查询失败，请稍后再试。</div>';
+  }
+
+  try {
+    const res = await fetch(`/api/weather?date_str=${dateStr}`);
+    const data = await res.json();
+    if (res.ok) {
+      weatherHtml =
+        `<div class="calendar-weather">白天${escapeHtml(data.text_day)} · 夜间${escapeHtml(data.text_night)} · ` +
+        `${data.temp_min}~${data.temp_max}℃</div>`;
+    } else {
+      weatherHtml = `<div class="calendar-note">${escapeHtml(data.detail || "天气查询失败")}</div>`;
+    }
+  } catch {
+    weatherHtml = '<div class="calendar-note">天气查询失败，请稍后再试。</div>';
+  }
+
+  resultEl.innerHTML = dayTypeHtml + weatherHtml;
+}
+
 function clearWeiboResults() {
   if (weiboMarkerLayer) map.removeLayer(weiboMarkerLayer);
   weiboMarkerLayer = null;
@@ -462,6 +525,9 @@ async function main() {
     document.getElementById("poiLikeThresholdValue").textContent = e.target.value;
     renderAllPoiLayer();
   });
+  document.getElementById("calendarDateInput").value = todayDateStr();
+  document.getElementById("calendarDateInput").addEventListener("change", queryCalendarAndWeather);
+  queryCalendarAndWeather(); // 页面加载时默认查一次今天，不用等用户手动改日期
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();

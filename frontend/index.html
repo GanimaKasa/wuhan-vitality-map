@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-<link rel="stylesheet" href="style.css?v=5" />
+<link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body>
 <div id="app">
@@ -41,6 +41,17 @@
             <button id="clearFilterBtn">清除筛选</button>
           </div>
           <div id="searchResultInfo" class="hint"></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="panel collapsible-panel">
+      <summary class="panel-summary">📅 日历 · 天气</summary>
+      <div class="panel-body">
+        <div class="panel-subsection">
+          <label for="calendarDateInput">选择日期</label>
+          <input id="calendarDateInput" type="date" />
+          <div id="calendarResult" class="calendar-result"></div>
         </div>
       </div>
     </details>
@@ -91,6 +102,6 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

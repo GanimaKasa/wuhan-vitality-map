@@ -126,6 +126,26 @@ button:hover { background: var(--accent); border-color: var(--accent); }
 }
 #poiCategorySelect { font-size: 12px; }
 input[type="range"] { accent-color: var(--accent); width: 100%; }
+input[type="date"] { color-scheme: dark; }
+
+.calendar-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.calendar-badge {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.calendar-badge.workday { background: var(--accent); color: white; }
+.calendar-badge.restday { background: var(--accent-hot); color: white; }
+.calendar-note { font-size: 11px; color: #7d879a; }
+.calendar-weather { color: var(--sidebar-fg); }
 
 .chat-panel { flex: 1; min-height: 260px; }
 
@@ -206,4 +226,5 @@ input[type="range"] { accent-color: var(--accent); width: 100%; }
   button { background: #eef1f6; color: #1b1f27; }
   .msg.bot { background: #eef1f6; }
   .weibo-item { background: #ffffff; }
+  input[type="date"] { color-scheme: light; background: #ffffff; color: #1b1f27; }
 }

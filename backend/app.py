@@ -6,6 +6,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -75,6 +76,40 @@ SILICONFLOW_RERANK_URL = "https://api.siliconflow.cn/v1/rerank"
 # 全部漏了精排，就是这么踩的坑）。RERANK_MAX_CANDIDATES是防止极端大top_n请求
 # 单次调用文档数过多的安全上限，超过这个上限的尾部才退回初筛排序。
 RERANK_MAX_CANDIDATES = 200
+
+# 和风天气：新版平台按项目分配专属API Host（不是共享的devapi.qweather.com了，
+# 裸用共享域名会被拒403 Invalid Host），host要去控制台"设置"页面查自己项目的。
+# 免费未认证账号只能拿/v7/weather/3d（未来3天，含今天）；认证开发者账号才能用
+# /v7/weather/7d拿7天，到时候只要改QWEATHER_FORECAST_DAYS就行，不用改调用逻辑。
+# 武汉的LocationID是固定值，用和风天气GeoAPI查过。
+QWEATHER_API_KEY = os.environ.get("QWEATHER_API_KEY")
+QWEATHER_HOST = "https://p26vhhq5qq.re.qweatherapi.com"
+QWEATHER_FORECAST_DAYS = "3d"
+WUHAN_LOCATION_ID = "101200101"
+
+# 中国法定节假日+调休数据：用NateScarlet/holiday-cn这个社区维护的开源数据集（每日
+# 自动抓取国务院公告更新），比自己按"周六周日=休息"简单判断准确——调休补班日
+# （比如国庆调休的周末上班）在这份数据里会被显式标成isOffDay=false。
+# 按年缓存在内存里，一年最多请求一次GitHub，避免每次查日期都重新拉取。
+HOLIDAY_CN_URL_TEMPLATE = "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json"
+_holiday_cache: dict[int, dict] = {}  # year -> {date_str: {"name":..., "is_off_day": bool}}
+
+
+def _get_holiday_map(year: int) -> dict:
+    if year in _holiday_cache:
+        return _holiday_cache[year]
+    try:
+        resp = requests.get(HOLIDAY_CN_URL_TEMPLATE.format(year=year), timeout=10)
+        resp.raise_for_status()
+        days = resp.json()["days"]
+        holiday_map = {d["date"]: {"name": d["name"], "is_off_day": d["isOffDay"]} for d in days}
+    except Exception as e:
+        # 拉取失败不缓存空结果——只是这次查询降级为仅按周末判断，下次请求还会重试，
+        # 避免一次网络抖动就让这一整年永久锁死在"没有节假日数据"的错误状态。
+        print(f"节假日数据拉取失败（{year}年），本次查询降级为仅按周末判断：{e}", flush=True)
+        return {}
+    _holiday_cache[year] = holiday_map
+    return holiday_map
 
 
 def _embed_query(text: str) -> np.ndarray:
@@ -159,6 +194,79 @@ def get_geojson():
 @app.get("/api/districts")
 def get_districts():
     return {"districts": KNOWN_DISTRICTS}
+
+
+@app.get("/api/calendar/day_type")
+def get_day_type(date_str: str):
+    """
+    判断某天是"工作日"还是"休息日"，含法定节假日/调休（数据源见_get_holiday_map）。
+    date_str格式YYYY-MM-DD。节假日数据里没有的日期，退回"周一到周五=工作日，
+    周六周日=休息日"的默认规则。
+    """
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式应为YYYY-MM-DD")
+
+    holiday_map = _get_holiday_map(d.year)
+    entry = holiday_map.get(date_str)
+    if entry is not None:
+        is_workday = not entry["is_off_day"]
+        note = entry["name"] + ("调休上班" if is_workday else "")
+    else:
+        is_workday = d.weekday() < 5  # 0=周一…4=周五
+        note = None
+
+    return {
+        "date": date_str,
+        "is_workday": is_workday,
+        "label": "工作日" if is_workday else "休息日",
+        "note": note,
+    }
+
+
+@app.get("/api/weather")
+def get_weather(date_str: str):
+    """
+    查武汉某天的天气预报。免费未认证账号只能查未来3天（含今天），超出范围会
+    返回404并提示原因，而不是笼统的"查询失败"。
+    """
+    if not QWEATHER_API_KEY:
+        raise HTTPException(status_code=503, detail="未配置QWEATHER_API_KEY环境变量，无法查询天气")
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式应为YYYY-MM-DD")
+
+    try:
+        resp = requests.get(
+            f"{QWEATHER_HOST}/v7/weather/{QWEATHER_FORECAST_DAYS}",
+            params={"location": WUHAN_LOCATION_ID},
+            headers={"X-QW-Api-Key": QWEATHER_API_KEY},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"天气服务暂时不可用，请稍后再试。（{e}）")
+
+    if payload.get("code") != "200":
+        raise HTTPException(status_code=503, detail=f"和风天气接口返回异常（code={payload.get('code')}）")
+
+    for day in payload.get("daily", []):
+        if day["fxDate"] == date_str:
+            return {
+                "date": date_str,
+                "text_day": day["textDay"],
+                "text_night": day["textNight"],
+                "temp_min": day["tempMin"],
+                "temp_max": day["tempMax"],
+            }
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"仅支持查询未来{QWEATHER_FORECAST_DAYS[:-1]}天的天气（免费未认证账号限制），{date_str}超出范围",
+    )
 
 
 @app.get("/api/search")
