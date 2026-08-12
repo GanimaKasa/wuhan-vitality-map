@@ -122,7 +122,17 @@ function buildActivityHtml(data) {
     const placeType = escapeHtml(p.place_type || "");
     return `<div class="activity-sample">「${text}」${placeType ? `（${placeType}）` : ""}</div>`;
   }).join("");
-  return `<div class="activity-summary"><b>活动解读（共${data.count}条样本）</b><br>${escapeHtml(data.summary)}</div>${samples}`;
+  const allPosts = data.posts.map((p) => {
+    const text = escapeHtml((p.text || "").trim());
+    const placeType = escapeHtml(p.place_type || "");
+    const postTime = escapeHtml(p.post_time || "");
+    return `<div class="activity-post-item">
+      <div class="activity-post-meta">${placeType || "未知类型"}${postTime ? ` · ${postTime}` : ""}</div>
+      <div class="activity-post-text">${text}</div>
+    </div>`;
+  }).join("");
+  return `<div class="activity-summary"><b>活动解读（共${data.count}条样本）</b><br>${escapeHtml(data.summary)}</div>${samples}
+    <div class="activity-post-list">${allPosts}</div>`;
 }
 
 document.addEventListener("click", async (e) => {
