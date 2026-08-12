@@ -172,7 +172,48 @@ function renderMarkers() {
 // deck.gl官方支持、CDN可直接用的独立模式——开关打开时切到一个deck.gl自带
 // 底图的3D画布（可倾斜/旋转/缩放），关闭时切回Leaflet 2D地图，两者共享同一
 // 经纬度坐标系统。
+//
+// 视觉效果参考了deck.gl官方文档+可视化配色的通用做法：
+// 1. 高度用平方根拉伸（cartography里经典的Flannery面积补偿类思路）而不是
+//    纯线性映射到固定的[MIN_BAR_HEIGHT, MAX_BAR_HEIGHT]米数区间——线性映射
+//    在数据大部分集中在低值、只有少数极端高值时，会让大多数柱子被压成一样
+//    矮的"地毯"，平方根让中低值也能拉开明显的高度差，视觉冲击力更强。
+// 2. 颜色用plasma色系（感知均匀、对比强烈，比默认蓝-绿-黄柱冲击力更强，
+//    是数据可视化里"要视觉冲击力"场景的推荐色系）而不是继续用2D地图那套
+//    偏柔和的色阶。
+// 3. flatShading+方向光源，让柱子之间的高度差通过明暗对比更直观。
 // ==============================================================
+
+const MIN_BAR_HEIGHT = 80; // 最矮的柱子也保留这么高，不会被极端值压成看不见的薄片
+const MAX_BAR_HEIGHT = 3000;
+
+// matplotlib plasma色系的关键取样点（感知均匀、高对比，数据可视化里公认比
+// 默认蓝绿黄红更有视觉冲击力），用线性插值在取样点之间过渡。
+const PLASMA_STOPS = ["#0d0887", "#7e03a8", "#cc4778", "#f89441", "#f0f921"].map(hexToRgb);
+
+function plasmaColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = PLASMA_STOPS.length - 1;
+  const scaled = t * n;
+  const i = Math.min(n - 1, Math.floor(scaled));
+  const frac = scaled - i;
+  const [r0, g0, b0] = PLASMA_STOPS[i];
+  const [r1, g1, b1] = PLASMA_STOPS[i + 1];
+  return [
+    Math.round(r0 + (r1 - r0) * frac),
+    Math.round(g0 + (g1 - g0) * frac),
+    Math.round(b0 + (b1 - b0) * frac),
+    255,
+  ];
+}
+
+// 平方根拉伸：把value在[domainMin, domainMax]里的相对位置t，用sqrt(t)而不是
+// t本身去插值到目标高度区间——低值段的高度差会被放大，不会被高值一家独大压平。
+function scaleElevation(value, domainMin, domainMax) {
+  if (domainMax <= domainMin) return MIN_BAR_HEIGHT;
+  const t = Math.max(0, Math.min(1, (value - domainMin) / (domainMax - domainMin)));
+  return MIN_BAR_HEIGHT + Math.sqrt(t) * (MAX_BAR_HEIGHT - MIN_BAR_HEIGHT);
+}
 
 function buildVitalityColumnLayer() {
   const data = geojsonData.features.map((feat) => ({
@@ -183,20 +224,30 @@ function buildVitalityColumnLayer() {
     id: "vitality-3d",
     data,
     diskResolution: 6,
-    radius: 90,
+    radius: 100,
     extruded: true,
-    elevationScale: 3,
+    flatShading: true,
+    material: { ambient: 0.35, diffuse: 0.6, shininess: 32, specularColor: [255, 255, 255] },
     getPosition: (d) => d.position,
-    getElevation: (d) => d.value,
-    getFillColor: (d) => hexToRgb(valueToColor(d.value, GLOBAL_COLOR_MIN, GLOBAL_COLOR_MAX)),
+    getElevation: (d) => scaleElevation(d.value, GLOBAL_COLOR_MIN, GLOBAL_COLOR_MAX),
+    getFillColor: (d) => {
+      const t = (d.value - GLOBAL_COLOR_MIN) / (GLOBAL_COLOR_MAX - GLOBAL_COLOR_MIN || 1);
+      return plasmaColor(t);
+    },
     pickable: true,
   });
 }
 
+// 微博3D柱状图的数据源是"全部微博POI"（受当前类别/点赞数筛选影响），不是
+// 语义搜索结果——语义搜索结果条数太少太稀疏（通常几十到一两百条分摊到几十
+// 个格网），柱子普遍只有1~3条，视觉上没有区分度；全量POI按格网聚合密度
+// 分布差异大得多，才有3D热力对比的意义。
 function buildWeiboColumnLayer() {
-  if (!lastWeiboData) return null;
+  const filtered = getFilteredAllPois();
+  if (!filtered.length) return null;
+
   const counts = new Map();
-  for (const post of lastWeiboData.posts) {
+  for (const post of filtered) {
     counts.set(post.grid_id, (counts.get(post.grid_id) || 0) + 1);
   }
   const data = [];
@@ -206,19 +257,26 @@ function buildWeiboColumnLayer() {
   }
   if (!data.length) return null;
 
-  const maxCount = Math.max(...data.map((d) => d.count));
+  const allCounts = data.map((d) => d.count).sort((a, b) => a - b);
+  // 用2%~98%分位数做domain而不是绝对min/max——避免个别扎堆格网的极端计数
+  // 把其余大多数格网的高度差压得看不出来（跟2D地图颜色映射用的分位数思路一致）。
+  const pct = (p) => allCounts[Math.min(allCounts.length - 1, Math.floor(p * (allCounts.length - 1)))];
+  const domainMin = pct(0.02);
+  const domainMax = pct(0.98);
+
   return new deck.ColumnLayer({
     id: "weibo-3d",
     data,
     diskResolution: 6,
-    radius: 90,
+    radius: 100,
     extruded: true,
-    elevationScale: 15,
+    flatShading: true,
+    material: { ambient: 0.35, diffuse: 0.6, shininess: 32, specularColor: [255, 255, 255] },
     getPosition: (d) => d.position,
-    getElevation: (d) => d.count,
+    getElevation: (d) => scaleElevation(d.count, domainMin, domainMax),
     getFillColor: (d) => {
-      const t = d.count / maxCount;
-      return [242, Math.round(165 - t * 60), Math.round(65 - t * 40), 255];
+      const t = (d.count - domainMin) / (domainMax - domainMin || 1);
+      return plasmaColor(t);
     },
     pickable: true,
   });
@@ -246,10 +304,20 @@ function ensureDeckInstance() {
     style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
     center: [114.28, 30.58],
     zoom: 11.5,
-    pitch: 45,
-    bearing: 0,
+    pitch: 50,
+    bearing: -20,
   });
-  deckOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+  // 方向光+环境光：柱子之间靠明暗对比强化高度差的直观感受，纯顶光下拉伸再高
+  // 的柱子看起来也会显得"扁"。
+  const lightingEffect = new deck.LightingEffect({
+    ambientLight: new deck.AmbientLight({ color: [255, 255, 255], intensity: 1.0 }),
+    directionalLight: new deck.DirectionalLight({
+      color: [255, 255, 255],
+      intensity: 2.5,
+      direction: [-2, -3, -1],
+    }),
+  });
+  deckOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [], effects: [lightingEffect] });
   maplibreMap.addControl(deckOverlay);
 }
 
@@ -385,7 +453,6 @@ function clearWeiboResults() {
   lastWeiboData = null;
   document.getElementById("weiboResultList").innerHTML = "";
   document.getElementById("weiboSearchInfo").textContent = "";
-  if (weibo3DOn) updateDeck3DLayers();
 }
 
 function getSortedWeiboPosts() {
@@ -435,8 +502,6 @@ function renderWeiboResults() {
   const sortLabel = sortByLikes ? "点赞数从高到低" : "相关度+热度综合";
   document.getElementById("weiboSearchInfo").textContent =
     `语义检索到 ${lastWeiboData.total_relevant} 条相关微博，按${sortLabel}排序展示前 ${lastWeiboData.returned} 条`;
-
-  if (weibo3DOn) updateDeck3DLayers();
 }
 
 async function weiboSearch() {
@@ -492,19 +557,25 @@ function getSelectedPoiCategories() {
   return [...sel.selectedOptions].map((o) => o.value);
 }
 
+function getFilteredAllPois() {
+  if (!allPoiData) return [];
+  const selectedCategories = getSelectedPoiCategories();
+  const minLikes = Number(document.getElementById("poiLikeThresholdInput").value) || 0;
+  return allPoiData.posts.filter((post) => {
+    if (post.like_count < minLikes) return false;
+    const category = post.place_type || "（未知类型）";
+    if (selectedCategories.length && !selectedCategories.includes(category)) return false;
+    return true;
+  });
+}
+
 function renderAllPoiLayer() {
   if (!allPoiData) return;
   if (allPoiClusterLayer) map.removeLayer(allPoiClusterLayer);
 
-  const selectedCategories = getSelectedPoiCategories();
-  const minLikes = Number(document.getElementById("poiLikeThresholdInput").value) || 0;
-
+  const filtered = getFilteredAllPois();
   allPoiClusterLayer = L.markerClusterGroup({ chunkedLoading: true });
-  let shown = 0;
-  for (const post of allPoiData.posts) {
-    if (post.like_count < minLikes) continue;
-    const category = post.place_type || "（未知类型）";
-    if (selectedCategories.length && !selectedCategories.includes(category)) continue;
+  for (const post of filtered) {
     const marker = L.circleMarker([post.lat, post.lng], {
       radius: 4,
       color: "#ffffff",
@@ -514,12 +585,13 @@ function renderAllPoiLayer() {
     });
     marker.bindPopup(() => poiPopupHtml(post));
     allPoiClusterLayer.addLayer(marker);
-    shown++;
   }
   allPoiClusterLayer.addTo(map);
 
   document.getElementById("allPoiInfo").textContent =
-    `共 ${allPoiData.count} 条POI，当前筛选展示 ${shown} 条`;
+    `共 ${allPoiData.count} 条POI，当前筛选展示 ${filtered.length} 条`;
+
+  if (weibo3DOn) updateDeck3DLayers();
 }
 
 async function loadAllPois() {
@@ -660,8 +732,11 @@ async function main() {
     vitality3DOn = e.target.checked;
     updateMap3DVisibility();
   });
-  document.getElementById("weibo3DToggle").addEventListener("change", (e) => {
+  document.getElementById("weibo3DToggle").addEventListener("change", async (e) => {
     weibo3DOn = e.target.checked;
+    // 3D柱状图数据源是全部POI，开关打开时如果还没拉取过全量数据就顺便拉一次，
+    // 不用非要先手动开"显示全部微博POI"那个开关才能看3D。
+    if (weibo3DOn && !allPoiData) await loadAllPois();
     updateMap3DVisibility();
   });
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);

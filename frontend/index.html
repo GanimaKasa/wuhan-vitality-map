@@ -77,10 +77,6 @@
             <input id="weiboSortByLikesToggle" type="checkbox" />
             按点赞数从高到低排序（默认按相关度+热度综合排序）
           </label>
-          <label class="checkbox-row">
-            <input id="weibo3DToggle" type="checkbox" />
-            🧊 3D柱状图（柱高=该格网搜索结果条数）
-          </label>
           <div id="weiboSearchInfo" class="hint"></div>
           <div id="weiboResultList" class="weibo-result-list"></div>
         </div>
@@ -102,6 +98,10 @@
             <input id="poiLikeThresholdInput" type="range" min="0" max="0" value="0" />
             <div id="allPoiInfo" class="hint"></div>
           </div>
+          <label class="checkbox-row">
+            <input id="weibo3DToggle" type="checkbox" />
+            🧊 3D柱状图（柱高=该格网POI密度，受上面类别/点赞筛选影响）
+          </label>
         </div>
       </div>
     </details>
@@ -124,6 +124,6 @@
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>
