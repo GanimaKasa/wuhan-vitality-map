@@ -739,6 +739,26 @@ async function main() {
     if (weibo3DOn && !allPoiData) await loadAllPois();
     updateMap3DVisibility();
   });
+  // 面板折叠后，里面还开着的地图图层类开关（3D柱状图、全部POI聚合展示）要跟着
+  // 自动关掉——不然面板收起来了，地图上的东西还留着，用户也没法在侧边栏看到
+  // 状态、没法关。复用checkbox已有的change监听逻辑（模拟一次用户手动取消勾选），
+  // 不用另外写一份清理逻辑。
+  function autoOffOnCollapse(detailsId, checkboxIds) {
+    const details = document.getElementById(detailsId);
+    details.addEventListener("toggle", () => {
+      if (details.open) return;
+      for (const id of checkboxIds) {
+        const cb = document.getElementById(id);
+        if (cb.checked) {
+          cb.checked = false;
+          cb.dispatchEvent(new Event("change"));
+        }
+      }
+    });
+  }
+  autoOffOnCollapse("vitalityPanel", ["vitality3DToggle"]);
+  autoOffOnCollapse("allPoiPanel", ["allPoiToggle", "weibo3DToggle"]);
+
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();

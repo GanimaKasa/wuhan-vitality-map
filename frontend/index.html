@@ -16,7 +16,7 @@
     <h1>武汉城市活力地图</h1>
     <p class="subtitle">基于8模态多模态模型的三环内250m格网活力预测（原型demo）</p>
 
-    <details class="panel collapsible-panel">
+    <details id="vitalityPanel" class="panel collapsible-panel">
       <summary class="panel-summary">🏙️ 城市活力（时段 · 行政区筛选）</summary>
       <div class="panel-body">
         <div class="panel-subsection">
@@ -83,7 +83,7 @@
       </div>
     </details>
 
-    <details class="panel collapsible-panel">
+    <details id="allPoiPanel" class="panel collapsible-panel">
       <summary class="panel-summary">📍 全部微博POI（类别 · 点赞筛选）</summary>
       <div class="panel-body">
         <div class="panel-subsection">
@@ -124,6 +124,6 @@
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
