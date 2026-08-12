@@ -273,7 +273,7 @@ function buildWeiboColumnLayer() {
   const data = [];
   for (const [gridId, count] of counts) {
     const pos = gridIdToLatLng.get(gridId);
-    if (pos) data.push({ position: pos, count });
+    if (pos) data.push({ position: pos, count, gridId });
   }
   if (!data.length) return null;
 
@@ -299,7 +299,27 @@ function buildWeiboColumnLayer() {
       return plasmaColor(t);
     },
     pickable: true,
+    onClick: (info) => handleWeibo3DBarClick(info),
   });
+}
+
+async function handleWeibo3DBarClick(info) {
+  if (!info.object || !maplibreMap) return;
+  const { gridId, count } = info.object;
+  const popup = new maplibregl.Popup({ closeButton: true, maxWidth: "300px" })
+    .setLngLat(info.coordinate)
+    .setHTML('<div class="grid-popup">加载中...</div>')
+    .addTo(maplibreMap);
+  try {
+    const res = await fetch(`/api/weibo/grid/${gridId}`);
+    const data = await res.json();
+    const html = res.ok
+      ? `<div class="grid-popup"><h3>格网 #${gridId}</h3><div class="hint">该柱统计的POI数：${count}</div>${buildActivityHtml(data)}</div>`
+      : `<div class="grid-popup">加载失败：${escapeHtml(data.detail || "请稍后再试")}</div>`;
+    popup.setHTML(html);
+  } catch {
+    popup.setHTML('<div class="grid-popup">加载失败，请稍后再试。</div>');
+  }
 }
 
 function updateDeck3DLayers() {
@@ -754,10 +774,20 @@ async function main() {
   queryCalendarAndWeather(); // 页面加载时默认查一次今天，不用等用户手动改日期
   document.getElementById("vitality3DToggle").addEventListener("change", (e) => {
     vitality3DOn = e.target.checked;
+    // 两个3D柱状图不共存——同时叠两层柱子在同一批格网上会互相遮挡，看不清楚
+    // 到底哪根柱子代表什么，开一个自动关掉另一个。
+    if (vitality3DOn && weibo3DOn) {
+      weibo3DOn = false;
+      document.getElementById("weibo3DToggle").checked = false;
+    }
     updateMap3DVisibility();
   });
   document.getElementById("weibo3DToggle").addEventListener("change", async (e) => {
     weibo3DOn = e.target.checked;
+    if (weibo3DOn && vitality3DOn) {
+      vitality3DOn = false;
+      document.getElementById("vitality3DToggle").checked = false;
+    }
     // 3D柱状图数据源是全部POI，开关打开时如果还没拉取过全量数据就顺便拉一次，
     // 不用非要先手动开"显示全部微博POI"那个开关才能看3D。
     if (weibo3DOn && !allPoiData) await loadAllPois();
