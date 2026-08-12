@@ -52,6 +52,10 @@
         <button id="weiboSearchBtn">搜索</button>
         <button id="weiboClearBtn">清除标记</button>
       </div>
+      <label class="checkbox-row">
+        <input id="weiboSortByLikesToggle" type="checkbox" />
+        按点赞数从高到低排序（默认按相关度+热度综合排序）
+      </label>
       <div id="weiboSearchInfo" class="hint"></div>
       <div id="weiboResultList" class="weibo-result-list"></div>
     </section>
@@ -70,6 +74,6 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

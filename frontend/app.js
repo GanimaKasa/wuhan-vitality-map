@@ -22,6 +22,7 @@ let geojsonData = null;
 let markerByGridId = new Map();
 let markerLayer = null;
 let weiboMarkerLayer = null;
+let lastWeiboData = null; // {total_relevant, returned, posts}——切换排序时对这份数据纯前端重排，不重新请求后端
 let currentPeriod = LABEL_COLS[2]; // 默认工作日_日间
 let fillHidden = false;   // true时不填充颜色
 let borderHidden = false; // true时连边框也不显示
@@ -198,16 +199,26 @@ function initPeriodSelect() {
 function clearWeiboResults() {
   if (weiboMarkerLayer) map.removeLayer(weiboMarkerLayer);
   weiboMarkerLayer = null;
+  lastWeiboData = null;
   document.getElementById("weiboResultList").innerHTML = "";
   document.getElementById("weiboSearchInfo").textContent = "";
 }
 
-function renderWeiboResults(data) {
-  clearWeiboResults();
+function getSortedWeiboPosts() {
+  if (!lastWeiboData) return [];
+  const sortByLikes = document.getElementById("weiboSortByLikesToggle").checked;
+  return sortByLikes
+    ? [...lastWeiboData.posts].sort((a, b) => b.like_count - a.like_count)
+    : lastWeiboData.posts;
+}
+
+function renderWeiboResults() {
+  if (weiboMarkerLayer) map.removeLayer(weiboMarkerLayer);
   weiboMarkerLayer = L.layerGroup();
   const listEl = document.getElementById("weiboResultList");
+  listEl.innerHTML = "";
 
-  for (const post of data.posts) {
+  for (const post of getSortedWeiboPosts()) {
     const marker = L.circleMarker([post.lat, post.lng], {
       radius: 5,
       color: "#ffffff",
@@ -236,8 +247,10 @@ function renderWeiboResults(data) {
   }
   weiboMarkerLayer.addTo(map);
 
+  const sortByLikes = document.getElementById("weiboSortByLikesToggle").checked;
+  const sortLabel = sortByLikes ? "点赞数从高到低" : "相关度+热度综合";
   document.getElementById("weiboSearchInfo").textContent =
-    `语义检索到 ${data.total_relevant} 条相关微博，按相关度+热度综合排序展示前 ${data.returned} 条`;
+    `语义检索到 ${lastWeiboData.total_relevant} 条相关微博，按${sortLabel}排序展示前 ${lastWeiboData.returned} 条`;
 }
 
 async function weiboSearch() {
@@ -252,7 +265,8 @@ async function weiboSearch() {
       document.getElementById("weiboSearchInfo").textContent = data.detail || "搜索失败，请稍后再试。";
       return;
     }
-    renderWeiboResults(data);
+    lastWeiboData = data;
+    renderWeiboResults();
   } catch {
     document.getElementById("weiboSearchInfo").textContent = "搜索失败，请稍后再试。";
   }
@@ -336,6 +350,9 @@ async function main() {
     if (e.key === "Enter") weiboSearch();
   });
   document.getElementById("weiboClearBtn").addEventListener("click", clearWeiboResults);
+  document.getElementById("weiboSortByLikesToggle").addEventListener("change", () => {
+    if (lastWeiboData) renderWeiboResults();
+  });
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
