@@ -7,7 +7,8 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-<link rel="stylesheet" href="style.css?v=7" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.css" />
+<link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
 <div id="app">
@@ -28,6 +29,10 @@
           <label class="checkbox-row">
             <input id="borderToggle" type="checkbox" />
             隐藏格网边界（连边框也不显示）
+          </label>
+          <label class="checkbox-row">
+            <input id="vitality3DToggle" type="checkbox" />
+            🧊 3D柱状图（柱高=当前时段活力值）
           </label>
         </div>
 
@@ -72,6 +77,10 @@
             <input id="weiboSortByLikesToggle" type="checkbox" />
             按点赞数从高到低排序（默认按相关度+热度综合排序）
           </label>
+          <label class="checkbox-row">
+            <input id="weibo3DToggle" type="checkbox" />
+            🧊 3D柱状图（柱高=该格网搜索结果条数）
+          </label>
           <div id="weiboSearchInfo" class="hint"></div>
           <div id="weiboResultList" class="weibo-result-list"></div>
         </div>
@@ -108,10 +117,13 @@
   </aside>
 
   <main id="mapContainer"></main>
+  <main id="map3dContainer" class="hidden"></main>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<script src="app.js?v=10"></script>
+<script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

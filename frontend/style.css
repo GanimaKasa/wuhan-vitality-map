@@ -168,6 +168,7 @@ input[type="date"] { color-scheme: dark; }
 .chat-input-row input { flex: 1; }
 
 #mapContainer { flex: 1; height: 100%; }
+#map3dContainer { flex: 1; height: 100%; position: relative; background: #0b0e13; }
 
 /* Leaflet popup 内容 */
 .grid-popup { font-size: 12.5px; line-height: 1.6; min-width: 220px; }

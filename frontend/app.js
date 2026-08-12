@@ -25,6 +25,11 @@ let weiboMarkerLayer = null;
 let lastWeiboData = null; // {total_relevant, returned, posts}——切换排序时对这份数据纯前端重排，不重新请求后端
 let allPoiData = null; // {count, posts}——全部微博POI轻量数据，只在首次开启开关时拉取一次并缓存
 let allPoiClusterLayer = null;
+let gridIdToLatLng = new Map(); // grid_id -> [lng, lat]，3D柱状图给微博数据按格网聚合定位用
+let maplibreMap = null;
+let deckOverlay = null;
+let vitality3DOn = false;
+let weibo3DOn = false;
 let currentPeriod = LABEL_COLS[2]; // 默认工作日_日间
 let fillHidden = false;   // true时不填充颜色
 let borderHidden = false; // true时连边框也不显示
@@ -50,6 +55,11 @@ function valueToColor(value, min, max) {
   const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
   const idx = Math.min(COLOR_RAMP.length - 2, Math.floor(t * (COLOR_RAMP.length - 1)));
   return COLOR_RAMP[idx];
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
 function gateBarHtml(props) {
@@ -156,6 +166,112 @@ function renderMarkers() {
   markerLayer.addTo(map);
 }
 
+// ==============================================================
+// 3D柱状图：deck.gl的Leaflet桥接库(deck.gl-leaflet)已停止维护且有已知bug
+// （LeafletLayer undefined），所以不在现有Leaflet画布上叠加3D图层，而是用
+// deck.gl官方支持、CDN可直接用的独立模式——开关打开时切到一个deck.gl自带
+// 底图的3D画布（可倾斜/旋转/缩放），关闭时切回Leaflet 2D地图，两者共享同一
+// 经纬度坐标系统。
+// ==============================================================
+
+function buildVitalityColumnLayer() {
+  const data = geojsonData.features.map((feat) => ({
+    position: feat.geometry.coordinates,
+    value: feat.properties[`pred_${currentPeriod}`],
+  }));
+  return new deck.ColumnLayer({
+    id: "vitality-3d",
+    data,
+    diskResolution: 6,
+    radius: 90,
+    extruded: true,
+    elevationScale: 3,
+    getPosition: (d) => d.position,
+    getElevation: (d) => d.value,
+    getFillColor: (d) => hexToRgb(valueToColor(d.value, GLOBAL_COLOR_MIN, GLOBAL_COLOR_MAX)),
+    pickable: true,
+  });
+}
+
+function buildWeiboColumnLayer() {
+  if (!lastWeiboData) return null;
+  const counts = new Map();
+  for (const post of lastWeiboData.posts) {
+    counts.set(post.grid_id, (counts.get(post.grid_id) || 0) + 1);
+  }
+  const data = [];
+  for (const [gridId, count] of counts) {
+    const pos = gridIdToLatLng.get(gridId);
+    if (pos) data.push({ position: pos, count });
+  }
+  if (!data.length) return null;
+
+  const maxCount = Math.max(...data.map((d) => d.count));
+  return new deck.ColumnLayer({
+    id: "weibo-3d",
+    data,
+    diskResolution: 6,
+    radius: 90,
+    extruded: true,
+    elevationScale: 15,
+    getPosition: (d) => d.position,
+    getElevation: (d) => d.count,
+    getFillColor: (d) => {
+      const t = d.count / maxCount;
+      return [242, Math.round(165 - t * 60), Math.round(65 - t * 40), 255];
+    },
+    pickable: true,
+  });
+}
+
+function updateDeck3DLayers() {
+  if (!deckOverlay) return;
+  const layers = [];
+  if (vitality3DOn && geojsonData) layers.push(buildVitalityColumnLayer());
+  if (weibo3DOn) {
+    const weiboLayer = buildWeiboColumnLayer();
+    if (weiboLayer) layers.push(weiboLayer);
+  }
+  deckOverlay.setProps({ layers });
+}
+
+function ensureDeckInstance() {
+  if (deckOverlay) return;
+  // deck.gl自身不带底图渲染能力（官方文档明确说standalone的Deck类不处理底图），
+  // 之前直接给deck.DeckGL传mapStyle却没加载maplibre-gl.js，导致canvas量不出
+  // 尺寸卡在默认300x150——踩过这个坑，正确做法是显式建一个MapLibre地图实例，
+  // 再用deck.gl官方支持的MapboxOverlay（兼容MapLibre）把3D图层叠加上去。
+  maplibreMap = new maplibregl.Map({
+    container: "map3dContainer",
+    style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
+    center: [114.28, 30.58],
+    zoom: 11.5,
+    pitch: 45,
+    bearing: 0,
+  });
+  deckOverlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+  maplibreMap.addControl(deckOverlay);
+}
+
+function updateMap3DVisibility() {
+  const anyOn = vitality3DOn || weibo3DOn;
+  const mapEl = document.getElementById("mapContainer");
+  const map3dEl = document.getElementById("map3dContainer");
+  if (anyOn) {
+    // 容器必须先变可见拿到真实宽高，MapLibre才能测出正确尺寸——顺序反了的话
+    // canvas会卡在初始化时的默认尺寸（父容器display:none时量不出尺寸）。
+    mapEl.classList.add("hidden");
+    map3dEl.classList.remove("hidden");
+    ensureDeckInstance();
+    if (maplibreMap) maplibreMap.resize(); // 容器从display:none变可见后手动触发一次重新量尺寸
+    updateDeck3DLayers();
+  } else {
+    map3dEl.classList.add("hidden");
+    mapEl.classList.remove("hidden");
+    map.invalidateSize(); // Leaflet隐藏期间尺寸缓存失效，切回来要手动触发重新计算
+  }
+}
+
 function toggleFill(hidden) {
   fillHidden = hidden;
   markerByGridId.forEach((m) => m.setStyle({ color: m.options.fillColor, ...currentStyle() }));
@@ -195,6 +311,7 @@ function initPeriodSelect() {
   sel.addEventListener("change", () => {
     currentPeriod = sel.value;
     renderMarkers();
+    if (vitality3DOn) updateDeck3DLayers();
   });
 }
 
@@ -218,6 +335,7 @@ function switchPeriodPrefix(isWorkday) {
   currentPeriod = LABEL_COLS.includes(candidate) ? candidate : LABEL_COLS.find((c) => c.startsWith(targetPrefix));
   document.getElementById("periodSelect").value = currentPeriod;
   renderMarkers();
+  if (vitality3DOn) updateDeck3DLayers();
 }
 
 async function queryCalendarAndWeather() {
@@ -267,6 +385,7 @@ function clearWeiboResults() {
   lastWeiboData = null;
   document.getElementById("weiboResultList").innerHTML = "";
   document.getElementById("weiboSearchInfo").textContent = "";
+  if (weibo3DOn) updateDeck3DLayers();
 }
 
 function getSortedWeiboPosts() {
@@ -316,6 +435,8 @@ function renderWeiboResults() {
   const sortLabel = sortByLikes ? "点赞数从高到低" : "相关度+热度综合";
   document.getElementById("weiboSearchInfo").textContent =
     `语义检索到 ${lastWeiboData.total_relevant} 条相关微博，按${sortLabel}排序展示前 ${lastWeiboData.returned} 条`;
+
+  if (weibo3DOn) updateDeck3DLayers();
 }
 
 async function weiboSearch() {
@@ -489,6 +610,9 @@ async function main() {
   geojsonData = await res.json();
   computeGlobalColorRange();
   renderMarkers();
+  for (const feat of geojsonData.features) {
+    gridIdToLatLng.set(feat.properties.grid_id, feat.geometry.coordinates);
+  }
 
   document.getElementById("topHighBtn").addEventListener("click", () => runTopSearch("desc"));
   document.getElementById("topLowBtn").addEventListener("click", () => runTopSearch("asc"));
@@ -532,6 +656,14 @@ async function main() {
   document.getElementById("calendarDateInput").value = todayDateStr();
   document.getElementById("calendarDateInput").addEventListener("change", queryCalendarAndWeather);
   queryCalendarAndWeather(); // 页面加载时默认查一次今天，不用等用户手动改日期
+  document.getElementById("vitality3DToggle").addEventListener("change", (e) => {
+    vitality3DOn = e.target.checked;
+    updateMap3DVisibility();
+  });
+  document.getElementById("weibo3DToggle").addEventListener("change", (e) => {
+    weibo3DOn = e.target.checked;
+    updateMap3DVisibility();
+  });
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
