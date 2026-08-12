@@ -293,20 +293,24 @@ function updateDeck3DLayers() {
   deckOverlay.setProps({ layers });
 }
 
+// 3D视图默认机位，reset按钮和初始化都用这份，保持一致。
+const MAP3D_DEFAULT_VIEW = { center: [114.28, 30.58], zoom: 11.5, pitch: 50, bearing: -20 };
+
 function ensureDeckInstance() {
   if (deckOverlay) return;
   // deck.gl自身不带底图渲染能力（官方文档明确说standalone的Deck类不处理底图），
   // 之前直接给deck.DeckGL传mapStyle却没加载maplibre-gl.js，导致canvas量不出
   // 尺寸卡在默认300x150——踩过这个坑，正确做法是显式建一个MapLibre地图实例，
   // 再用deck.gl官方支持的MapboxOverlay（兼容MapLibre）把3D图层叠加上去。
+  // MapLibre默认就支持左键拖拽平移、右键(或Ctrl+左键)拖拽旋转俯仰、滚轮缩放，
+  // 不用额外写交互逻辑；只是这些手势对普通用户不够直观，所以另外加了可见的
+  // 罗盘控件+复位视角按钮+操作提示文字，让"全方位查看"这件事显性化。
   maplibreMap = new maplibregl.Map({
     container: "map3dContainer",
     style: "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json",
-    center: [114.28, 30.58],
-    zoom: 11.5,
-    pitch: 50,
-    bearing: -20,
+    ...MAP3D_DEFAULT_VIEW,
   });
+  maplibreMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
   // 方向光+环境光：柱子之间靠明暗对比强化高度差的直观感受，纯顶光下拉伸再高
   // 的柱子看起来也会显得"扁"。
   const lightingEffect = new deck.LightingEffect({
@@ -738,6 +742,9 @@ async function main() {
     // 不用非要先手动开"显示全部微博POI"那个开关才能看3D。
     if (weibo3DOn && !allPoiData) await loadAllPois();
     updateMap3DVisibility();
+  });
+  document.getElementById("reset3DViewBtn").addEventListener("click", () => {
+    if (maplibreMap) maplibreMap.easeTo({ ...MAP3D_DEFAULT_VIEW, duration: 600 });
   });
   // 面板折叠后，里面还开着的地图图层类开关（3D柱状图、全部POI聚合展示）要跟着
   // 自动关掉——不然面板收起来了，地图上的东西还留着，用户也没法在侧边栏看到
