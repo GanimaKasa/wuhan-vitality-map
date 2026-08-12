@@ -44,6 +44,26 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 18,
 }).addTo(map);
 
+// 2D地图本身不支持旋转（格网是按正北朝上画的矩形），指南针在这里是固定指北的
+// 静态图标，不是实时指向控件——主要是跟3D视图的罗盘控件保持视觉一致，用户
+// 一眼能确认"上=北"，两种模式切换时不会有"这个东西怎么不见了"的落差感。
+const CompassControl = L.Control.extend({
+  options: { position: "topright" },
+  onAdd: function () {
+    const div = L.DomUtil.create("div", "compass-badge");
+    div.title = "正北朝上（2D地图不支持旋转）";
+    div.innerHTML =
+      '<svg width="34" height="34" viewBox="0 0 34 34">' +
+      '<circle cx="17" cy="17" r="16" fill="rgba(20,24,32,0.85)" stroke="rgba(255,255,255,0.25)"/>' +
+      '<polygon points="17,6 21,17 17,14 13,17" fill="#d6604d"/>' +
+      '<polygon points="17,28 13,17 17,20 21,17" fill="#cfd4dd"/>' +
+      '<text x="17" y="10" text-anchor="middle" font-size="7" fill="#ffffff" font-weight="bold">N</text>' +
+      "</svg>";
+    return div;
+  },
+});
+map.addControl(new CompassControl());
+
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str ?? "";
