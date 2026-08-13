@@ -257,17 +257,18 @@ def _call_deepseek(messages: list[dict]) -> dict:
     return resp.json()["choices"][0]["message"]
 
 
-def run_agent_stream(question: str, tool_impls: dict, extract_grid_ids):
+def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
     """
     question: 用户原始问题
     tool_impls: {工具名: 可调用对象}，由app.py传入，实际执行逻辑在app.py里
-    extract_grid_ids: (tool_name, result_dict) -> list[int]，从工具结果里挑出可以在
-        地图上高亮的grid_id，由app.py传入（因为哪个字段是grid_id这件事跟数据结构强相关）
+    extract_map_features: (tool_name, result_dict) -> {"grid_ids":[...], "markers":[...],
+        "polylines":[...]}，从工具结果里挑出能在地图上画的东西，由app.py传入（因为哪个
+        字段对应什么地图元素跟数据结构强相关）
 
     生成一系列事件dict：
     - {"type": "tool_call", "tool": name, "label": ...}
     - {"type": "tool_result", "tool": name, "label": ...}
-    - {"type": "final", "answer": str, "highlight_grid_ids": [...]}
+    - {"type": "final", "answer": str, "highlight_grid_ids": [...], "markers": [...], "polylines": [...]}
     """
     today = _today_str()
     messages = [
@@ -275,25 +276,28 @@ def run_agent_stream(question: str, tool_impls: dict, extract_grid_ids):
         {"role": "user", "content": question},
     ]
     highlight_grid_ids: list[int] = []
+    markers: list[dict] = []
+    polylines: list[list] = []
+
+    def _final(answer: str) -> dict:
+        return {
+            "type": "final",
+            "answer": answer,
+            "highlight_grid_ids": highlight_grid_ids,
+            "markers": markers,
+            "polylines": polylines,
+        }
 
     for _ in range(MAX_AGENT_STEPS):
         try:
             msg = _call_deepseek(messages)
         except Exception as e:
-            yield {
-                "type": "final",
-                "answer": f"抱歉，推荐服务暂时不可用，请稍后再试。（{e}）",
-                "highlight_grid_ids": highlight_grid_ids,
-            }
+            yield _final(f"抱歉，推荐服务暂时不可用，请稍后再试。（{e}）")
             return
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            yield {
-                "type": "final",
-                "answer": msg.get("content") or "抱歉，我没能给出有效回答，换个问法再试试？",
-                "highlight_grid_ids": highlight_grid_ids,
-            }
+            yield _final(msg.get("content") or "抱歉，我没能给出有效回答，换个问法再试试？")
             return
 
         messages.append(msg)
@@ -317,19 +321,21 @@ def run_agent_stream(question: str, tool_impls: dict, extract_grid_ids):
                     result = {"error": str(e)}
 
             try:
-                highlight_grid_ids.extend(extract_grid_ids(name, result))
+                features = extract_map_features(name, result) or {}
+                highlight_grid_ids.extend(features.get("grid_ids", []))
+                markers.extend(features.get("markers", []))
+                polylines.extend(features.get("polylines", []))
             except Exception:
                 pass
 
             yield {"type": "tool_result", "tool": name, "label": label}
+            # 下划线开头的字段（比如route_between的_polyline，几百个坐标点）只给地图用，
+            # 不喂给模型——模型不需要看坐标串，喂了只会白白吃掉token。
+            model_visible_result = {k: v for k, v in result.items() if not k.startswith("_")}
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
-                "content": json.dumps(result, ensure_ascii=False),
+                "content": json.dumps(model_visible_result, ensure_ascii=False),
             })
 
-    yield {
-        "type": "final",
-        "answer": "这个问题有点复杂，我没能在几步内理清楚，要不换个更具体的问法？",
-        "highlight_grid_ids": highlight_grid_ids,
-    }
+    yield _final("这个问题有点复杂，我没能在几步内理清楚，要不换个更具体的问法？")

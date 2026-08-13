@@ -557,13 +557,25 @@ def _tool_geocode(address: str) -> dict:
     }
 
 
+def _parse_amap_polyline(polyline_str: str) -> list[list[float]]:
+    """高德polyline字符串"lng,lat;lng,lat;..."解析成[[lng,lat],...]坐标数组"""
+    points = []
+    for pair in polyline_str.split(";"):
+        if not pair:
+            continue
+        lng_str, lat_str = pair.split(",")
+        points.append([float(lng_str), float(lat_str)])
+    return points
+
+
 def _tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float,
                          mode: str = "driving") -> dict:
     """
     两点间真实路线，接高德Direction API。mode: driving(驾车)/walking(步行)/
-    transit(公交+地铁，含换乘站和地铁出入口信息)。只返回精简摘要（距离/耗时/
-    公交地铁线路名+上下车站+出入口），不带polyline坐标串——那是给地图画线用的，
-    这里是给模型做文字推荐用，不需要。
+    transit(公交+地铁，含换乘站和地铁出入口信息)。返回给模型的字段只有精简摘要
+    （距离/耗时/公交地铁线路名+上下车站+出入口）；真实道路坐标串存在"_polyline"
+    这个下划线开头的字段里——agent_client.py喂给模型前会把下划线字段过滤掉
+    （模型不需要几百个坐标点，那样只会浪费token），但会保留给前端画在地图上。
     """
     if not AMAP_API_KEY:
         return {"error": "未配置AMAP_API_KEY环境变量，无法查询路线"}
@@ -594,10 +606,15 @@ def _tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, d
         if not paths:
             return {"error": "查不到这两点间的路线"}
         path = paths[0]
+        polyline = []
+        for step in path.get("steps", []):
+            if step.get("polyline"):
+                polyline.extend(_parse_amap_polyline(step["polyline"]))
         return {
             "mode": mode,
             "distance_m": int(path["distance"]),
             "duration_min": round(int(path["duration"]) / 60, 1),
+            "_polyline": polyline,
         }
 
     # transit（公交/地铁组合）：取推荐的第一个换乘方案，逐段摘出关键信息
@@ -606,7 +623,14 @@ def _tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, d
         return {"error": "查不到这两点间的公交/地铁路线"}
     t = transits[0]
     segments = []
+    polyline = []
     for seg in t.get("segments", []):
+        walking = seg.get("walking")
+        if walking and walking.get("steps"):
+            for step in walking["steps"]:
+                if step.get("polyline"):
+                    polyline.extend(_parse_amap_polyline(step["polyline"]))
+
         buslines = seg.get("bus", {}).get("buslines")
         if buslines:
             line = buslines[0]
@@ -621,13 +645,17 @@ def _tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, d
             if seg.get("exit", {}).get("name"):
                 entry["exit"] = seg["exit"]["name"]
             segments.append(entry)
-        elif seg.get("walking", {}).get("distance"):
-            segments.append({"type": "步行", "distance_m": int(seg["walking"]["distance"])})
+            if line.get("polyline"):
+                polyline.extend(_parse_amap_polyline(line["polyline"]))
+        elif walking and walking.get("distance"):
+            segments.append({"type": "步行", "distance_m": int(walking["distance"])})
+
     return {
         "mode": "transit",
         "total_duration_min": round(int(t["duration"]) / 60, 1),
         "walking_distance_m": int(t.get("walking_distance", 0)),
         "segments": segments,
+        "_polyline": polyline,
     }
 
 
@@ -688,13 +716,23 @@ AGENT_TOOL_IMPLS = {
 }
 
 
-def _extract_grid_ids(tool_name: str, result: dict) -> list[int]:
-    """从工具结果里挑出grid_id，用于前端在地图上高亮相关格网"""
+def _extract_map_features(tool_name: str, result: dict) -> dict:
+    """
+    从工具结果里挑出能在地图上画出来的东西：
+    - grid_ids：城市活力/微博热点命中的格网，前端高亮用
+    - markers：geocode查到的地点，前端画点用
+    - polylines：route_between查到的真实道路坐标串（存在"_polyline"字段里，
+      不会被喂给模型，只在这里、只给地图用）
+    """
     if tool_name == "get_vitality":
-        return [r["grid_id"] for r in result.get("results", [])]
+        return {"grid_ids": [r["grid_id"] for r in result.get("results", [])]}
     if tool_name == "search_weibo_hotspots":
-        return [p["grid_id"] for p in result.get("posts", [])]
-    return []
+        return {"grid_ids": [p["grid_id"] for p in result.get("posts", [])]}
+    if tool_name == "geocode" and "lng" in result and "lat" in result:
+        return {"markers": [{"name": result.get("name"), "lng": result["lng"], "lat": result["lat"]}]}
+    if tool_name == "route_between" and result.get("_polyline"):
+        return {"polylines": [result["_polyline"]]}
+    return {}
 
 
 class AgentChatRequest(BaseModel):
@@ -712,7 +750,7 @@ def chat_agent(req: AgentChatRequest, request: Request):
     _check_rate_limit(client_ip)
 
     def event_stream():
-        for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_grid_ids):
+        for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_map_features):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

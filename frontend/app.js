@@ -749,7 +749,43 @@ function handleAgentEvent(event) {
     if (event.highlight_grid_ids && event.highlight_grid_ids.length) {
       highlightGridIds(event.highlight_grid_ids);
     }
+    renderAgentRoute(event.markers, event.polylines);
   }
+}
+
+let agentRouteLayer = null;
+
+// agent规划路线时，把geocode查到的点（编号标记）和route_between查到的真实道路
+// 坐标串（不是直线近似）画在地图上。markers的编号顺序是工具调用顺序（geocode
+// 一般在plan_route_order排完最终顺序之前调用），不严格等于最终访问顺序，
+// 但足够让用户看清"路线大致覆盖了哪些点"。
+function renderAgentRoute(markers, polylines) {
+  if (agentRouteLayer) map.removeLayer(agentRouteLayer);
+  if ((!markers || !markers.length) && (!polylines || !polylines.length)) return;
+
+  agentRouteLayer = L.layerGroup();
+  for (const line of polylines || []) {
+    const latlngs = line.map(([lng, lat]) => [lat, lng]);
+    L.polyline(latlngs, { color: "#4393c3", weight: 4, opacity: 0.85 }).addTo(agentRouteLayer);
+  }
+
+  const bounds = [];
+  (markers || []).forEach((m, i) => {
+    const marker = L.marker([m.lat, m.lng], {
+      icon: L.divIcon({
+        className: "agent-route-marker",
+        html: `<div class="agent-route-marker-badge">${i + 1}</div>`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      }),
+    });
+    marker.bindPopup(escapeHtml(m.name || ""));
+    marker.addTo(agentRouteLayer);
+    bounds.push([m.lat, m.lng]);
+  });
+
+  agentRouteLayer.addTo(map);
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
 }
 
 async function runAgentRecommend() {
@@ -761,6 +797,10 @@ async function runAgentRecommend() {
   const answerEl = document.getElementById("agentAnswer");
   timeline.innerHTML = "";
   answerEl.textContent = "";
+  if (agentRouteLayer) {
+    map.removeLayer(agentRouteLayer);
+    agentRouteLayer = null;
+  }
 
   const sendBtn = document.getElementById("agentSendBtn");
   sendBtn.disabled = true;
