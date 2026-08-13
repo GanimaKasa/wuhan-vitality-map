@@ -2,7 +2,9 @@
 #  FastAPI 主服务：地图数据 / 查询检索 / LLM问答(mock) / 前端静态文件
 # ==============================================================
 
+import itertools
 import json
+import math
 import os
 import time
 from collections import defaultdict
@@ -93,6 +95,17 @@ WUHAN_LOCATION_ID = "101200101"
 # SDK示例容易让人以为要走别的认证方式）。
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 TAVILY_API_URL = "https://api.tavily.com/search"
+
+# 高德地图Web服务API：地理编码（地名->经纬度）+ 路径规划（驾车/步行/公交含地铁）。
+# 注意申请key时要选"Web服务"平台，不是"Web端(JS API)"——后者是给网页里嵌交互式
+# 地图组件用的，我们这里是后端直接发HTTP请求调REST接口，跟嵌入式地图组件无关。
+AMAP_API_KEY = os.environ.get("AMAP_API_KEY")
+AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_DIRECTION_URLS = {
+    "driving": "https://restapi.amap.com/v3/direction/driving",
+    "walking": "https://restapi.amap.com/v3/direction/walking",
+    "transit": "https://restapi.amap.com/v3/direction/transit/integrated",
+}
 
 # 中国法定节假日+调休数据：用NateScarlet/holiday-cn这个社区维护的开源数据集（每日
 # 自动抓取国务院公告更新），比自己按"周六周日=休息"简单判断准确——调休补班日
@@ -518,12 +531,160 @@ def _tool_web_search(query: str) -> dict:
     }
 
 
+def _tool_geocode(address: str) -> dict:
+    """地名->精确经纬度，用高德地理编码API（city限定武汉，避免同名地点歧义）"""
+    if not AMAP_API_KEY:
+        return {"error": "未配置AMAP_API_KEY环境变量，无法查询地点坐标"}
+    try:
+        resp = requests.get(
+            AMAP_GEOCODE_URL,
+            params={"address": address, "city": "武汉", "key": AMAP_API_KEY},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return {"error": f"地理编码查询失败：{e}"}
+    if data.get("status") != "1" or not data.get("geocodes"):
+        return {"error": f"没查到「{address}」的坐标，换个更精确/更常见的地名试试"}
+    geo = data["geocodes"][0]
+    lng, lat = geo["location"].split(",")
+    return {
+        "name": address,
+        "formatted_address": geo.get("formatted_address"),
+        "lng": float(lng),
+        "lat": float(lat),
+    }
+
+
+def _tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float,
+                         mode: str = "driving") -> dict:
+    """
+    两点间真实路线，接高德Direction API。mode: driving(驾车)/walking(步行)/
+    transit(公交+地铁，含换乘站和地铁出入口信息)。只返回精简摘要（距离/耗时/
+    公交地铁线路名+上下车站+出入口），不带polyline坐标串——那是给地图画线用的，
+    这里是给模型做文字推荐用，不需要。
+    """
+    if not AMAP_API_KEY:
+        return {"error": "未配置AMAP_API_KEY环境变量，无法查询路线"}
+    url = AMAP_DIRECTION_URLS.get(mode)
+    if not url:
+        return {"error": f"不支持的出行方式：{mode}，可选driving/walking/transit"}
+
+    params = {
+        "origin": f"{origin_lng},{origin_lat}",
+        "destination": f"{dest_lng},{dest_lat}",
+        "key": AMAP_API_KEY,
+    }
+    if mode == "transit":
+        params["city"] = "武汉"
+
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return {"error": f"路线查询失败：{e}"}
+
+    if data.get("status") != "1":
+        return {"error": f"高德接口返回异常：{data.get('info')}"}
+
+    if mode in ("driving", "walking"):
+        paths = data.get("route", {}).get("paths", [])
+        if not paths:
+            return {"error": "查不到这两点间的路线"}
+        path = paths[0]
+        return {
+            "mode": mode,
+            "distance_m": int(path["distance"]),
+            "duration_min": round(int(path["duration"]) / 60, 1),
+        }
+
+    # transit（公交/地铁组合）：取推荐的第一个换乘方案，逐段摘出关键信息
+    transits = data.get("route", {}).get("transits", [])
+    if not transits:
+        return {"error": "查不到这两点间的公交/地铁路线"}
+    t = transits[0]
+    segments = []
+    for seg in t.get("segments", []):
+        buslines = seg.get("bus", {}).get("buslines")
+        if buslines:
+            line = buslines[0]
+            entry = {
+                "type": "地铁" if "地铁" in (line.get("type") or "") else "公交",
+                "line_name": line.get("name"),
+                "from_stop": line.get("departure_stop", {}).get("name"),
+                "to_stop": line.get("arrival_stop", {}).get("name"),
+            }
+            if seg.get("entrance", {}).get("name"):
+                entry["entrance"] = seg["entrance"]["name"]
+            if seg.get("exit", {}).get("name"):
+                entry["exit"] = seg["exit"]["name"]
+            segments.append(entry)
+        elif seg.get("walking", {}).get("distance"):
+            segments.append({"type": "步行", "distance_m": int(seg["walking"]["distance"])})
+    return {
+        "mode": "transit",
+        "total_duration_min": round(int(t["duration"]) / 60, 1),
+        "walking_distance_m": int(t.get("walking_distance", 0)),
+        "segments": segments,
+    }
+
+
+def _haversine_m(lng1: float, lat1: float, lng2: float, lat2: float) -> float:
+    r = 6371000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def _tool_plan_route_order(points: list[dict]) -> dict:
+    """
+    points: [{"name":..., "lng":..., "lat":...}, ...]
+    给多个候选点排一个访问顺序，纯本地计算、不调外部API：用直线距离暴力枚举
+    全排列，找总距离最短的顺序（不是精确路网距离，只用来决定"先去哪后去哪"这个
+    大致顺序，真实路线交给route_between逐段查）。8个点以内全排列（8!=4万级，
+    毫秒级跑完）；超过8个退化成贪心最近邻，避免排列组合数爆炸。
+    """
+    n = len(points)
+    if n < 2:
+        return {"error": "至少需要2个点才能规划访问顺序"}
+
+    def total_distance(order):
+        return sum(
+            _haversine_m(order[i]["lng"], order[i]["lat"], order[i + 1]["lng"], order[i + 1]["lat"])
+            for i in range(len(order) - 1)
+        )
+
+    if n <= 8:
+        best_order = list(min(itertools.permutations(points), key=total_distance))
+    else:
+        remaining = points[1:]
+        best_order = [points[0]]
+        while remaining:
+            last = best_order[-1]
+            nxt = min(remaining, key=lambda p: _haversine_m(last["lng"], last["lat"], p["lng"], p["lat"]))
+            best_order.append(nxt)
+            remaining.remove(nxt)
+
+    return {
+        "order": [p["name"] for p in best_order],
+        "points": best_order,
+        "total_straight_line_distance_m": round(total_distance(best_order)),
+    }
+
+
 AGENT_TOOL_IMPLS = {
     "is_workday": _tool_is_workday,
     "get_weather": _tool_get_weather,
     "get_vitality": _tool_get_vitality,
     "search_weibo_hotspots": _tool_search_weibo_hotspots,
     "web_search": _tool_web_search,
+    "geocode": _tool_geocode,
+    "route_between": _tool_route_between,
+    "plan_route_order": _tool_plan_route_order,
 }
 
 

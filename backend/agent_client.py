@@ -38,8 +38,8 @@ def _today_str() -> str:
     return datetime.now(SHANGHAI_TZ).date().isoformat()
 
 AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智能推荐助手。用户会问一些开放性问题，
-比如"这个周末去哪玩""晚上想找个热闹的地方"，你需要综合日历、天气、城市活力预测、微博热点、
-必要时的网页搜索这些工具查到的真实数据，给出有依据、说人话的推荐。
+比如"这个周末去哪玩""晚上想找个热闹的地方""帮我规划一条旅游路线"，你需要综合日历、天气、
+城市活力预测、微博热点、必要时的网页搜索和地图工具查到的真实数据，给出有依据、说人话的推荐。
 
 今天的日期是{today}。
 
@@ -52,12 +52,24 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智�
 - search_weibo_hotspots(keyword, top_n)：语义检索微博热点，看看大家在讨论/去哪儿玩，
   返回的是真实脱敏微博样本，不是精确统计
 - web_search(query)：通用网页搜索，微博数据/城市活力数据都覆盖不到的开放性信息（比如具体
-  某个新开业地点的介绍）用这个兜底，搜索结果可能不够准确，回答时要提醒用户"仅供参考"
+  某个新开业地点的介绍、网友推荐的打卡点名称）用这个兜底，搜索结果可能不够准确，回答时
+  要提醒用户"仅供参考"
+
+规划旅游路线时用这三个工具配合（用户明确要"路线""行程""怎么走"这类需求才需要）：
+- geocode(address)：把一个地名（比如从web_search结果里提取出的打卡点名字）转成精确经纬度，
+  地名不够精确查不到时会报错，换个更常见的说法再试
+- plan_route_order(points)：给多个候选点（每个要有name/lng/lat）排一个访问顺序，返回的是
+  直线距离下的最优顺序，不是精确路网距离——只用来决定"先去哪后去哪"这个大致顺序
+- route_between(origin_lng, origin_lat, dest_lng, dest_lat, mode)：查两点间的真实路线
+  （mode可选driving驾车/walking步行/transit公交地铁），按plan_route_order排好的顺序，
+  对相邻两点逐段调用这个工具拿真实路线，不要跳过这一步直接用直线距离当成真实路程告诉用户
 
 要求：
 - 先想清楚需要哪些信息再决定调用顺序，不要瞎调用不相关的工具
-- 工具报错时（比如日期超出天气预报范围、天气/搜索服务不可用）如实告诉用户，不要编造数据
-- 最终回答要口语化、有理有据，直接给结论和具体推荐地点/时段，不要罗列"我调用了什么工具"这种过程
+- 工具报错时（比如日期超出天气预报范围、天气/搜索服务不可用、地名查不到坐标）如实告诉用户，
+  不要编造数据
+- 最终回答要口语化、有理有据，直接给结论和具体推荐地点/时段/路线，不要罗列"我调用了什么工具"
+  这种过程
 - 不要说你是AI，不需要开场白
 """
 
@@ -147,6 +159,68 @@ AGENT_TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "geocode",
+            "description": "把一个地名转成精确经纬度坐标（武汉范围内），地名不够精确时查不到会报错",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string", "description": "地名，如“黄鹤楼”“楚河汉街”"},
+                },
+                "required": ["address"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_route_order",
+            "description": "给多个候选打卡点排一个访问顺序（按直线距离最优排序，不是精确路网距离）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "points": {
+                        "type": "array",
+                        "description": "候选点列表，每个点要有name/lng/lat三个字段",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "lng": {"type": "number"},
+                                "lat": {"type": "number"},
+                            },
+                            "required": ["name", "lng", "lat"],
+                        },
+                    },
+                },
+                "required": ["points"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "route_between",
+            "description": "查两点间的真实路线（驾车/步行/公交地铁），公交模式含地铁换乘站和出入口信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin_lng": {"type": "number"},
+                    "origin_lat": {"type": "number"},
+                    "dest_lng": {"type": "number"},
+                    "dest_lat": {"type": "number"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["driving", "walking", "transit"],
+                        "description": "driving=驾车，walking=步行，transit=公交地铁组合",
+                    },
+                },
+                "required": ["origin_lng", "origin_lat", "dest_lng", "dest_lat"],
+            },
+        },
+    },
 ]
 
 TOOL_DISPLAY_NAMES = {
@@ -155,6 +229,9 @@ TOOL_DISPLAY_NAMES = {
     "get_vitality": "查询城市活力数据",
     "search_weibo_hotspots": "检索微博热点",
     "web_search": "搜索网页",
+    "geocode": "查询地点坐标",
+    "plan_route_order": "规划访问顺序",
+    "route_between": "查询路线",
 }
 
 
