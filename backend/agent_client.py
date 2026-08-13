@@ -26,7 +26,11 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_MODEL = "deepseek-chat"
 
 # 硬上限，不依赖模型"自觉"停下来——防止意外的死循环调用，控制成本和延迟。
-MAX_AGENT_STEPS = 5
+# 5曾经不够用：路线规划这类任务有硬性顺序依赖（先geocode拿到坐标，才能排访问
+# 顺序，排完顺序才能逐段查真实路线），哪怕同一轮里能并行打包多个工具调用，
+# 光是"发现候选点→排序→逐段查路线"这条链路最少也要4~5轮，5变成了卡在半路
+# 触发"问题太复杂"兜底话术、实际上数据都快查完了的情况（线上实测复现过）。
+MAX_AGENT_STEPS = 8
 
 # Render服务器容器默认跑UTC时区，如果直接用date.today()（读服务器本地时间），
 # 北京时间0点~8点这段时间UTC日期还停在"前一天"，会让agent把"今天"算错一整天
