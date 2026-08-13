@@ -14,10 +14,11 @@ import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import agent_client
 import llm_client  # 导入时会load_dotenv()，读取.env里的DEEPSEEK_API_KEY/HF_TOKEN
 import retrieval
 
@@ -86,6 +87,12 @@ QWEATHER_API_KEY = os.environ.get("QWEATHER_API_KEY")
 QWEATHER_HOST = "https://p26vhhq5qq.re.qweatherapi.com"
 QWEATHER_FORECAST_DAYS = "3d"
 WUHAN_LOCATION_ID = "101200101"
+
+# Tavily网页搜索：给agent当"兜底"工具用，覆盖微博数据集/城市活力模型都查不到的
+# 开放性信息。认证方式是Authorization:Bearer头（实测确认过，官方文档给的Python
+# SDK示例容易让人以为要走别的认证方式）。
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+TAVILY_API_URL = "https://api.tavily.com/search"
 
 # 中国法定节假日+调休数据：用NateScarlet/holiday-cn这个社区维护的开源数据集（每日
 # 自动抓取国务院公告更新），比自己按"周六周日=休息"简单判断准确——调休补班日
@@ -435,6 +442,119 @@ def weibo_grid_activity(grid_id: int, request: Request):
         "summary": summary,
         "posts": posts[["text", "place_type", "post_time"]].head(20).to_dict(orient="records"),
     }
+
+
+# ==============================================================
+#  智能推荐agent（案例一/二）：反复调用DeepSeek + 下面这几个工具，直到给出
+#  最终答案。循环编排逻辑在agent_client.py，这里只负责"工具具体怎么执行"——
+#  全部直接复用上面已经写好的路由函数，不重新实现一遍逻辑。返回给模型的数据
+#  都做了精简（截断文本、限制条数、去掉经纬度这类模型用不上的字段），控制
+#  token成本。
+# ==============================================================
+
+def _tool_is_workday(date: str) -> dict:
+    try:
+        return get_day_type(date_str=date)
+    except HTTPException as e:
+        return {"error": e.detail}
+
+
+def _tool_get_weather(date: str) -> dict:
+    try:
+        return get_weather(date_str=date)
+    except HTTPException as e:
+        return {"error": e.detail}
+
+
+def _tool_get_vitality(period: str | None = None, district: str | None = None,
+                        order: str = "desc", topn: int = 10) -> dict:
+    result = search(district=district, period=period, topn=topn, order=order)
+    return {
+        "count": result["count"],
+        "results": [
+            {"grid_id": r["grid_id"], "district": r["district"], "value": round(r["value"], 2)}
+            for r in result["results"]
+        ],
+    }
+
+
+def _tool_search_weibo_hotspots(keyword: str, top_n: int = 20) -> dict:
+    result = weibo_search(keyword=keyword, top_n=top_n)
+    posts = result["posts"][:10]  # 只给模型看前10条，控制token成本
+    return {
+        "total_relevant": result["total_relevant"],
+        "posts": [
+            {
+                "text": (p["text"] or "")[:60],
+                "grid_id": p["grid_id"],
+                "district": GRID_ID_TO_DISTRICT.get(p["grid_id"], "未知"),
+                "place_type": p["place_type"],
+                "like_count": p["like_count"],
+            }
+            for p in posts
+        ],
+    }
+
+
+def _tool_web_search(query: str) -> dict:
+    if not TAVILY_API_KEY:
+        return {"error": "未配置TAVILY_API_KEY环境变量，网页搜索不可用"}
+    try:
+        resp = requests.post(
+            TAVILY_API_URL,
+            headers={"Authorization": f"Bearer {TAVILY_API_KEY}"},
+            json={"query": query, "search_depth": "basic", "max_results": 5},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        return {"error": f"网页搜索失败：{e}"}
+    return {
+        "results": [
+            {"title": r["title"], "content": (r["content"] or "")[:200], "url": r["url"]}
+            for r in data.get("results", [])[:5]
+        ],
+    }
+
+
+AGENT_TOOL_IMPLS = {
+    "is_workday": _tool_is_workday,
+    "get_weather": _tool_get_weather,
+    "get_vitality": _tool_get_vitality,
+    "search_weibo_hotspots": _tool_search_weibo_hotspots,
+    "web_search": _tool_web_search,
+}
+
+
+def _extract_grid_ids(tool_name: str, result: dict) -> list[int]:
+    """从工具结果里挑出grid_id，用于前端在地图上高亮相关格网"""
+    if tool_name == "get_vitality":
+        return [r["grid_id"] for r in result.get("results", [])]
+    if tool_name == "search_weibo_hotspots":
+        return [p["grid_id"] for p in result.get("posts", [])]
+    return []
+
+
+class AgentChatRequest(BaseModel):
+    question: str
+
+
+@app.post("/api/chat/agent")
+def chat_agent(req: AgentChatRequest, request: Request):
+    """
+    案例一/二的智能推荐入口：流式返回agent循环的每一步（正在查询什么工具/工具执行
+    完毕/最终答案），前端用于实时展示进度。每行一个SSE格式的data:事件，用fetch+
+    ReadableStream手动解析（不用EventSource，因为要POST，EventSource只支持GET）。
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
+
+    def event_stream():
+        for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_grid_ids):
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

@@ -147,6 +147,38 @@ input[type="date"] { color-scheme: dark; }
 .calendar-note { font-size: 11px; color: #7d879a; }
 .calendar-weather { color: var(--sidebar-fg); }
 
+#agentInput { width: 100%; }
+#agentSendBtn { margin-top: 6px; width: 100%; }
+
+.agent-timeline {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.agent-step {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #10141a;
+  border: 1px solid var(--border);
+  color: #9aa3b2;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.agent-step.done { color: var(--sidebar-fg); border-color: var(--accent); }
+
+.agent-answer {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #10141a;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.agent-answer:empty { display: none; }
+
 .chat-panel { flex: 1; min-height: 260px; }
 
 #chatMessages {
@@ -274,4 +306,5 @@ input[type="date"] { color-scheme: dark; }
   .msg.bot { background: #eef1f6; }
   .weibo-item { background: #ffffff; }
   input[type="date"] { color-scheme: light; background: #ffffff; color: #1b1f27; }
+  .agent-step, .agent-answer { background: #ffffff; }
 }

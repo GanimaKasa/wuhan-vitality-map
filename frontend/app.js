@@ -728,6 +728,78 @@ async function sendChat() {
   }
 }
 
+function handleAgentEvent(event) {
+  const timeline = document.getElementById("agentTimeline");
+  if (event.type === "tool_call") {
+    const item = document.createElement("div");
+    item.className = "agent-step";
+    item.dataset.tool = event.tool;
+    item.textContent = `🔍 正在${event.label}...`;
+    timeline.appendChild(item);
+    timeline.scrollTop = timeline.scrollHeight;
+  } else if (event.type === "tool_result") {
+    const steps = timeline.querySelectorAll(`.agent-step[data-tool="${event.tool}"]`);
+    const item = steps[steps.length - 1];
+    if (item) {
+      item.textContent = `✅ ${event.label}完成`;
+      item.classList.add("done");
+    }
+  } else if (event.type === "final") {
+    document.getElementById("agentAnswer").textContent = event.answer;
+    if (event.highlight_grid_ids && event.highlight_grid_ids.length) {
+      highlightGridIds(event.highlight_grid_ids);
+    }
+  }
+}
+
+async function runAgentRecommend() {
+  const input = document.getElementById("agentInput");
+  const question = input.value.trim();
+  if (!question) return;
+
+  const timeline = document.getElementById("agentTimeline");
+  const answerEl = document.getElementById("agentAnswer");
+  timeline.innerHTML = "";
+  answerEl.textContent = "";
+
+  const sendBtn = document.getElementById("agentSendBtn");
+  sendBtn.disabled = true;
+  sendBtn.textContent = "思考中...";
+
+  try {
+    const res = await fetch("/api/chat/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      answerEl.textContent = data.detail || "请求失败，请稍后再试。";
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop(); // 最后一段可能不完整（还没收全一个事件），留到下次拼接
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        handleAgentEvent(JSON.parse(part.slice(6)));
+      }
+    }
+  } catch {
+    answerEl.textContent = "请求失败，请稍后再试。";
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.textContent = "推荐";
+  }
+}
+
 async function main() {
   initPeriodSelect();
   await initDistrictList();
@@ -829,6 +901,10 @@ async function main() {
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
+  });
+  document.getElementById("agentSendBtn").addEventListener("click", runAgentRecommend);
+  document.getElementById("agentInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runAgentRecommend();
   });
 
   appendMessage("bot", "你好，我是活力地图问答助手，已接入DeepSeek。可以问我“武昌区晚上活力怎么样”这类问题，也可以在上面的微博搜索框里搜关键词看真实网友动态。");
