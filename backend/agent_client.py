@@ -13,7 +13,8 @@
 
 import json
 import os
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -26,6 +27,15 @@ DEEPSEEK_MODEL = "deepseek-chat"
 
 # 硬上限，不依赖模型"自觉"停下来——防止意外的死循环调用，控制成本和延迟。
 MAX_AGENT_STEPS = 5
+
+# Render服务器容器默认跑UTC时区，如果直接用date.today()（读服务器本地时间），
+# 北京时间0点~8点这段时间UTC日期还停在"前一天"，会让agent把"今天"算错一整天
+# （已线上实测踩过这个坑）。武汉/中国场景必须显式用Asia/Shanghai时区。
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _today_str() -> str:
+    return datetime.now(SHANGHAI_TZ).date().isoformat()
 
 AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智能推荐助手。用户会问一些开放性问题，
 比如"这个周末去哪玩""晚上想找个热闹的地方"，你需要综合日历、天气、城市活力预测、微博热点、
@@ -178,7 +188,7 @@ def run_agent_stream(question: str, tool_impls: dict, extract_grid_ids):
     - {"type": "tool_result", "tool": name, "label": ...}
     - {"type": "final", "answer": str, "highlight_grid_ids": [...]}
     """
-    today = date.today().isoformat()
+    today = _today_str()
     messages = [
         {"role": "system", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(today=today)},
         {"role": "user", "content": question},
