@@ -417,7 +417,7 @@ async function toggleStudyAreaBoundary(show) {
         studyAreaBoundaryData = await res.json();
       }
       studyAreaBoundaryLayer = L.geoJSON(studyAreaBoundaryData, {
-        style: { color: "#ffffff", weight: 2, fillOpacity: 0 },
+        style: { color: "#d6604d", weight: 4, fillOpacity: 0, dashArray: "8 6" },
       });
     }
     studyAreaBoundaryLayer.addTo(map);
