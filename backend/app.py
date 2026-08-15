@@ -391,6 +391,24 @@ def _should_use_agent(question: str, intent: dict, has_history: bool = False) ->
     return has_open_ended_kw or not has_signal or references_memory
 
 
+# agent路径的finish由模型自己判断该不该高亮格网（见agent_client.py），但模型的判断
+# 会有偏差——真实复现过"推荐8个打卡点+规划路线"这类问题，8个高亮格网里有2个是模型
+# 顺手从一次不相关的"全城活力排名"查询里带上的，跟推荐的具体地点没关系。这里加一道
+# 硬性兜底：用户这轮问题本身（不是历史）压根没提"活力/热闹/冷清"这类词的话，直接不
+# 展示格网高亮，不管模型选了什么——不是猜"有没有路线"这种间接信号，是直接检查最相关
+# 的那个信号本身（用户是不是真的问了活力相关的问题），复用retrieval.py里parse_direction
+# 已经在用的同一份关键词表，不重新造一份。
+VITALITY_KEYWORDS = set(retrieval.HIGH_KEYWORDS) | set(retrieval.LOW_KEYWORDS)
+
+
+def _suppress_ungrounded_highlight(event: dict, question: str) -> dict:
+    if event.get("type") != "final" or not event.get("highlight_grid_ids"):
+        return event
+    if any(kw in question for kw in VITALITY_KEYWORDS):
+        return event
+    return {**event, "highlight_grid_ids": []}
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, request: Request):
     """
@@ -408,10 +426,14 @@ def chat(req: ChatRequest, request: Request):
 
     def event_stream():
         if req.pending_turn:
+            # req.question在恢复场景下是前端透传回来的"这一整轮最初的问题"（不是这次
+            # 回复的文字），用来做下面的活力关键词兜底检查——跟全新一轮走同一套判断。
+            original_question = req.question or ""
             for event in agent_client.run_agent_stream(
                 AGENT_TOOL_IMPLS, _extract_map_features,
                 pending_turn=req.pending_turn, reply=req.reply,
             ):
+                event = _suppress_ungrounded_highlight(event, original_question)
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
 
@@ -424,6 +446,7 @@ def chat(req: ChatRequest, request: Request):
                 AGENT_TOOL_IMPLS, _extract_map_features,
                 question=question, history=req.history,
             ):
+                event = _suppress_ungrounded_highlight(event, question)
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
 

@@ -926,9 +926,11 @@ async function sendChat() {
   // 有pendingState说明这句话是在回答上一轮的ask_user反问，走"恢复"路径：
   // 原样把快照传回去，turnQuestion沿用这一整轮最初的那句问题（不是这句回复），
   // 这样最终存进历史的是"完整一轮的原始问题+最终答案"，不是反问的中间过程。
+  // question字段在恢复场景下也带上这轮最初的问题（不是这次回复文字）——后端
+  // 用它做"这轮问题有没有提活力相关词"的兜底判断，判断标准跟全新一轮保持一致。
   const isResuming = !!chatPendingState;
   const requestBody = isResuming
-    ? { pending_turn: chatPendingState.pendingTurn, reply: text }
+    ? { pending_turn: chatPendingState.pendingTurn, reply: text, question: chatPendingState.originalQuestion }
     : { question: text, history: chatHistory };
   const turnQuestion = isResuming ? chatPendingState.originalQuestion : text;
 
