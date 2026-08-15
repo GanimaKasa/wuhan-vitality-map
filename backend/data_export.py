@@ -82,6 +82,13 @@ def main():
     mu = label_stats["mu"].values
     sigma = label_stats["sigma"].values
     pred_raw = pred_std * sigma + mu
+    # 真实标签本身非负（百度慧眼热力值求和/取均值，10维标签实测最小值就是0.0），
+    # 但回归模型在标准化空间训练，最后一层没有约束输出下限——低活力格网的预测值
+    # 偶尔会越过0变成负数，这是test R²=0.4874这个精度水平下越接近0越容易出现的
+    # 正常回归噪声，不是bug。裁到0只影响这份导出给网站展示用的数据，不改动
+    # checkpoint本身，也不影响已经写进论文的test R²等评估指标（那些指标是在
+    # 裁剪之前的pred_raw上算的，这里的裁剪只发生在导出这一步之后）。
+    pred_raw = np.clip(pred_raw, 0, None)
 
     gates = torch.cat(all_gates, dim=0).numpy()
     miss_w = np.concatenate(all_miss_w)
