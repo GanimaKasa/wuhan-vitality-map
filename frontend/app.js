@@ -404,7 +404,7 @@ function toggleBorder(hidden) {
   markerByGridId.forEach((m) => m.setStyle({ color: m.options.fillColor, ...currentStyle() }));
 }
 
-function highlightGridIds(gridIds) {
+function highlightGridIds(gridIds, flyToFirst = true) {
   markerByGridId.forEach((m) => m.setStyle({ color: m.options.fillColor, ...currentStyle() }));
   let firstMarker = null;
   for (const gid of gridIds) {
@@ -415,7 +415,7 @@ function highlightGridIds(gridIds) {
       if (!firstMarker) firstMarker = m;
     }
   }
-  if (firstMarker) {
+  if (firstMarker && flyToFirst) {
     map.flyTo(firstMarker.getBounds().getCenter(), 14);
     firstMarker.openPopup();
   }
@@ -746,10 +746,17 @@ function handleAgentEvent(event) {
     }
   } else if (event.type === "final") {
     document.getElementById("agentAnswer").textContent = event.answer;
-    if (event.highlight_grid_ids && event.highlight_grid_ids.length) {
-      highlightGridIds(event.highlight_grid_ids);
+    const gridIds = event.highlight_grid_ids || [];
+    const hasGrids = gridIds.length > 0;
+    const hasRoute = (event.markers && event.markers.length) || (event.polylines && event.polylines.length);
+
+    // 两种信号都有时，谁都不单独飞镜头，最后统一算一个同时框住两者的视野；
+    // 只有一种信号时，各自按原来的方式飞镜头（不改变已有的单一场景行为）。
+    if (hasGrids) highlightGridIds(gridIds, !hasRoute);
+    renderAgentRoute(event.markers, event.polylines, !hasGrids);
+    if (hasGrids && hasRoute) {
+      fitBoundsToGridsAndRoute(gridIds, event.markers, event.polylines);
     }
-    renderAgentRoute(event.markers, event.polylines);
   }
 }
 
@@ -759,7 +766,7 @@ let agentRouteLayer = null;
 // 坐标串（不是直线近似）画在地图上。markers的编号顺序是工具调用顺序（geocode
 // 一般在plan_route_order排完最终顺序之前调用），不严格等于最终访问顺序，
 // 但足够让用户看清"路线大致覆盖了哪些点"。
-function renderAgentRoute(markers, polylines) {
+function renderAgentRoute(markers, polylines, autoFit = true) {
   if (agentRouteLayer) map.removeLayer(agentRouteLayer);
   if ((!markers || !markers.length) && (!polylines || !polylines.length)) return;
 
@@ -785,7 +792,30 @@ function renderAgentRoute(markers, polylines) {
   });
 
   agentRouteLayer.addTo(map);
-  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
+  if (autoFit && bounds.length) {
+    map.invalidateSize();
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }
+}
+
+// 高亮格网和路线标记/连线都会争抢"地图该看向哪"这个镜头控制权，两种信号同时
+// 出现时（比如"规划下周末游玩路线"这种问法，既查了活力数据又geocode了地点），
+// 不能各自飞一次镜头互相打架——后调用的会覆盖先调用的，先高亮的格网还没看清
+// 镜头就被路线标记抢走了。统一算一个能同时框住格网+路线的视野，只飞一次镜头。
+function fitBoundsToGridsAndRoute(gridIds, markers, polylines) {
+  const bounds = L.latLngBounds([]);
+  for (const gid of gridIds || []) {
+    const pos = gridIdToLatLng.get(gid); // [lng, lat]
+    if (pos) bounds.extend([pos[1], pos[0]]);
+  }
+  for (const m of markers || []) bounds.extend([m.lat, m.lng]);
+  for (const line of polylines || []) {
+    for (const [lng, lat] of line) bounds.extend([lat, lng]);
+  }
+  if (bounds.isValid()) {
+    map.invalidateSize(); // 防止Leaflet缓存的容器尺寸过期导致fitBounds算出的缩放级别不对
+    map.fitBounds(bounds, { padding: [40, 40] });
+  }
 }
 
 async function runAgentRecommend() {
