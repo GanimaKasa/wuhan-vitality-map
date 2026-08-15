@@ -323,16 +323,52 @@ input[type="date"] { color-scheme: dark; }
   background: transparent;
   padding: 0;
 }
+/* 每个工具调用步骤是一个<details>，右边一个小箭头，点击展开能看到这次调用
+   的参数+结果原始数据——跟Claude Code展示工具调用的方式一致，默认收起来
+   只留一行摘要，不想看细节的话不会觉得聊天记录被塞满。 */
 .agent-step {
   font-size: 12px;
-  padding: 6px 10px;
   border-radius: 6px;
   background: #10141a;
   border: 1px solid var(--border);
   color: #9aa3b2;
   transition: color 0.15s ease, border-color 0.15s ease;
+  overflow: hidden;
 }
 .agent-step.done { color: var(--sidebar-fg); border-color: var(--accent); }
+.agent-step > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  user-select: none;
+}
+.agent-step > summary::-webkit-details-marker { display: none; }
+.agent-step > summary::after {
+  content: "▸";
+  font-size: 10px;
+  color: #7d879a;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.agent-step[open] > summary::after { transform: rotate(90deg); }
+.agent-step-summary-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-step-detail {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #7d879a;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.agent-step-detail b { color: var(--sidebar-fg); }
 
 /* 智能问答面板要撑满浮出面板的剩余高度，消息列表内部单独滚动，不能让
    整个flyout-body一起滚动（不然输入框会被滚没了）。 */
@@ -356,8 +392,18 @@ input[type="date"] { color-scheme: dark; }
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input { flex: 1; }
 
-.chat-toolbar { display: flex; gap: 6px; flex-shrink: 0; }
-.chat-toolbar-btn { flex: 1; font-size: 11px; padding: 6px 8px; }
+.chat-toolbar { display: flex; gap: 6px; flex-shrink: 0; justify-content: flex-end; }
+.chat-icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 8px;
+  font-size: 15px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
 .chat-memory-settings {
   display: flex;

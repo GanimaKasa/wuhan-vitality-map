@@ -816,22 +816,38 @@ function startNewConversation() {
 // 会先收到若干"tool_call"/"tool_result"中间步骤事件，渲染成聊天流里的一条
 // 步骤气泡；中途可能收到一个"ask_user"事件——模型主动停下来问一句，等用户
 // 回答才会继续；最后收到"final"事件。
+// 每个工具调用步骤渲染成一个<details>，默认收起来只显示一行摘要，右边一个
+// 小箭头，点开能看到这次调用的参数+结果原始数据——参考Claude Code展示工具
+// 调用的方式，不想看细节的话聊天记录不会被塞满，想看的话点一下就有。
 function handleChatEvent(event, stepsBox, turnQuestion) {
   const box = document.getElementById("chatMessages");
   if (event.type === "tool_call") {
     stepsBox.classList.remove("hidden");
-    const item = document.createElement("div");
+    const item = document.createElement("details");
     item.className = "agent-step";
     item.dataset.tool = event.tool;
-    item.textContent = `🔍 正在${event.label}...`;
+    const summary = document.createElement("summary");
+    const summaryText = document.createElement("span");
+    summaryText.className = "agent-step-summary-text";
+    summaryText.textContent = `🔍 正在${event.label}...`;
+    summary.appendChild(summaryText);
+    item.appendChild(summary);
+    const argsDetail = document.createElement("pre");
+    argsDetail.className = "agent-step-detail";
+    argsDetail.textContent = `参数：${JSON.stringify(event.args ?? {}, null, 2)}`;
+    item.appendChild(argsDetail);
     stepsBox.appendChild(item);
     box.scrollTop = box.scrollHeight;
   } else if (event.type === "tool_result") {
     const steps = stepsBox.querySelectorAll(`.agent-step[data-tool="${event.tool}"]`);
     const item = steps[steps.length - 1];
     if (item) {
-      item.textContent = `✅ ${event.label}完成`;
+      item.querySelector(".agent-step-summary-text").textContent = `✅ ${event.label}完成`;
       item.classList.add("done");
+      const resultDetail = document.createElement("pre");
+      resultDetail.className = "agent-step-detail";
+      resultDetail.textContent = `结果：${JSON.stringify(event.result ?? {}, null, 2)}`;
+      item.appendChild(resultDetail);
     }
   } else if (event.type === "ask_user") {
     if (stepsBox.classList.contains("hidden")) stepsBox.remove();

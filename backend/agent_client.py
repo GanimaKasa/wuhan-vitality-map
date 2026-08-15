@@ -402,8 +402,11 @@ def run_agent_stream(
         阶段做白名单校验，本身不产生任何地图效果。
 
     生成一系列事件dict：
-    - {"type": "tool_call", "tool": name, "label": ...}
-    - {"type": "tool_result", "tool": name, "label": ...}
+    - {"type": "tool_call", "tool": name, "label": ..., "args": {...}}
+    - {"type": "tool_result", "tool": name, "label": ..., "result": {...}}——args/result原样
+      带给前端，用户可以点开这一步看到具体查了什么、查到了什么（跟Claude Code展示工具
+      调用的方式一致），result已经过滤掉了下划线开头的字段（太长/没意义，比如route_between
+      的完整坐标串）
     - {"type": "ask_user", "question": str, "options": [...] | None, "pending_turn": {...}}
     - {"type": "final", "answer": str, "highlight_grid_ids": [...], "markers": [...], "polylines": [...]}
 
@@ -493,7 +496,9 @@ def run_agent_stream(
                 return
 
             label = TOOL_DISPLAY_NAMES.get(name, name)
-            yield {"type": "tool_call", "tool": name, "label": label}
+            # args原样带给前端，用户点开这一步能看到"这次查询用了什么参数"（比如geocode
+            # 查了哪个地名），跟Claude Code展示工具调用的方式一致。
+            yield {"type": "tool_call", "tool": name, "label": label, "args": args}
 
             impl = tool_impls.get(name)
             if impl is None:
@@ -512,10 +517,11 @@ def run_agent_stream(
             except Exception:
                 pass
 
-            yield {"type": "tool_result", "tool": name, "label": label}
             # 下划线开头的字段（比如route_between的_polyline，几百个坐标点）只给地图用，
-            # 不喂给模型——模型不需要看坐标串，喂了只会白白吃掉token。
+            # 不喂给模型（模型不需要看坐标串，喂了只会白白吃掉token）、也不展示给用户
+            # （太长了，点开步骤详情只会看到一坨坐标数字，没意义）。
             model_visible_result = {k: v for k, v in result.items() if not k.startswith("_")}
+            yield {"type": "tool_result", "tool": name, "label": label, "result": model_visible_result}
             messages.append({
                 "role": "tool",
                 "tool_call_id": call["id"],
