@@ -110,24 +110,11 @@
       </div>
     </details>
 
-    <details id="agentPanel" class="panel collapsible-panel">
-      <summary class="panel-summary">🤖 智能推荐（多步骤思考）</summary>
-      <div class="panel-body">
-        <div class="panel-subsection">
-          <label for="agentInput">向智能助手提问（会自动查天气/日历/活力/热点）</label>
-          <input id="agentInput" type="text" placeholder="例如：这个周末去哪玩？" />
-          <button id="agentSendBtn">发送</button>
-          <div id="agentTimeline" class="agent-timeline"></div>
-          <div id="agentAnswer" class="agent-answer"></div>
-        </div>
-      </div>
-    </details>
-
     <section class="panel chat-panel">
-      <label>大语言模型问答（已接入DeepSeek）</label>
+      <label>大语言模型问答（已接入DeepSeek，可以问活力数据，也可以问路线推荐）</label>
       <div id="chatMessages"></div>
       <div class="chat-input-row">
-        <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样" />
+        <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样 / 这个周末去哪玩" />
         <button id="chatSendBtn">发送</button>
       </div>
     </section>

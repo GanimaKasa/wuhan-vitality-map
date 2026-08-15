@@ -147,14 +147,14 @@ input[type="date"] { color-scheme: dark; }
 .calendar-note { font-size: 11px; color: #7d879a; }
 .calendar-weather { color: var(--sidebar-fg); }
 
-#agentInput { width: 100%; }
-#agentSendBtn { margin-top: 6px; width: 100%; }
-
-.agent-timeline {
-  margin-top: 10px;
+/* 合并"问答"/"智能推荐"面板后，走agent路径时的中间步骤展示成聊天流里的一条
+   气泡（内部是若干.agent-step行），跟走快速路径时看不到这条气泡的体验统一。 */
+.agent-steps-msg {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  background: transparent;
+  padding: 0;
 }
 .agent-step {
   font-size: 12px;
@@ -166,18 +166,6 @@ input[type="date"] { color-scheme: dark; }
   transition: color 0.15s ease, border-color 0.15s ease;
 }
 .agent-step.done { color: var(--sidebar-fg); border-color: var(--accent); }
-
-.agent-answer {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  background: #10141a;
-  border: 1px solid var(--border);
-  font-size: 13px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-.agent-answer:empty { display: none; }
 
 .chat-panel { flex: 1; min-height: 260px; }
 
@@ -321,5 +309,5 @@ input[type="date"] { color-scheme: dark; }
   .msg.bot { background: #eef1f6; }
   .weibo-item { background: #ffffff; }
   input[type="date"] { color-scheme: light; background: #ffffff; color: #1b1f27; }
-  .agent-step, .agent-answer { background: #ffffff; }
+  .agent-step { background: #ffffff; }
 }

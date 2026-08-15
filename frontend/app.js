@@ -728,47 +728,32 @@ function appendMessage(role, text) {
   box.scrollTop = box.scrollHeight;
 }
 
-async function sendChat() {
-  const input = document.getElementById("chatInput");
-  const question = input.value.trim();
-  if (!question) return;
-  appendMessage("user", question);
-  input.value = "";
-
-  const res = await fetch("/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    appendMessage("bot", data.detail || "请求失败，请稍后再试。");
-    return;
-  }
-  appendMessage("bot", data.answer);
-  if (data.highlight_grid_ids && data.highlight_grid_ids.length) {
-    highlightGridIds(data.highlight_grid_ids);
-  }
-}
-
-function handleAgentEvent(event) {
-  const timeline = document.getElementById("agentTimeline");
+// 问答框合并前，"快问快答"(/api/chat)和"智能推荐"(/api/chat/agent)是两个独立
+// 输入框，用户分不清该用哪个。现在统一成一个/api/chat端点+一个输入框，后端按
+// 问题内容判断走哪条内部路径，前端不关心走的是哪条——都当同一套SSE事件流处理：
+// 简单问题只收到一个"final"事件（跟原来agent路径的最终事件同格式），复杂问题
+// 会先收到若干"tool_call"/"tool_result"中间步骤事件，渲染成聊天流里的一条
+// 步骤气泡，再收到"final"事件。
+function handleChatEvent(event, stepsBox) {
+  const box = document.getElementById("chatMessages");
   if (event.type === "tool_call") {
+    stepsBox.classList.remove("hidden");
     const item = document.createElement("div");
     item.className = "agent-step";
     item.dataset.tool = event.tool;
     item.textContent = `🔍 正在${event.label}...`;
-    timeline.appendChild(item);
-    timeline.scrollTop = timeline.scrollHeight;
+    stepsBox.appendChild(item);
+    box.scrollTop = box.scrollHeight;
   } else if (event.type === "tool_result") {
-    const steps = timeline.querySelectorAll(`.agent-step[data-tool="${event.tool}"]`);
+    const steps = stepsBox.querySelectorAll(`.agent-step[data-tool="${event.tool}"]`);
     const item = steps[steps.length - 1];
     if (item) {
       item.textContent = `✅ ${event.label}完成`;
       item.classList.add("done");
     }
   } else if (event.type === "final") {
-    document.getElementById("agentAnswer").textContent = event.answer;
+    if (stepsBox.classList.contains("hidden")) stepsBox.remove();
+    appendMessage("bot", event.answer);
     const gridIds = event.highlight_grid_ids || [];
     const hasGrids = gridIds.length > 0;
     const hasRoute = (event.markers && event.markers.length) || (event.polylines && event.polylines.length);
@@ -780,6 +765,65 @@ function handleAgentEvent(event) {
     if (hasGrids && hasRoute) {
       fitBoundsToGridsAndRoute(gridIds, event.markers, event.polylines);
     }
+  }
+}
+
+async function sendChat() {
+  const input = document.getElementById("chatInput");
+  const question = input.value.trim();
+  if (!question) return;
+  appendMessage("user", question);
+  input.value = "";
+
+  const box = document.getElementById("chatMessages");
+  const sendBtn = document.getElementById("chatSendBtn");
+  sendBtn.disabled = true;
+  sendBtn.textContent = "思考中...";
+  if (agentRouteLayer) {
+    map.removeLayer(agentRouteLayer);
+    agentRouteLayer = null;
+  }
+
+  // 中间步骤气泡先建好但保持隐藏——只有走多步骤路径时后端才会发tool_call事件，
+  // 那时才显示出来；简单问题走完全程这个气泡都是空的，最终答案来了直接移除。
+  const stepsBox = document.createElement("div");
+  stepsBox.className = "msg bot agent-steps-msg hidden";
+  box.appendChild(stepsBox);
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      stepsBox.remove();
+      appendMessage("bot", data.detail || "请求失败，请稍后再试。");
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop(); // 最后一段可能不完整（还没收全一个事件），留到下次拼接
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        handleChatEvent(JSON.parse(part.slice(6)), stepsBox);
+      }
+    }
+  } catch {
+    stepsBox.remove();
+    appendMessage("bot", "请求失败，请稍后再试。");
+  } finally {
+    sendBtn.disabled = false;
+    sendBtn.textContent = "发送";
+    box.scrollTop = box.scrollHeight;
   }
 }
 
@@ -838,58 +882,6 @@ function fitBoundsToGridsAndRoute(gridIds, markers, polylines) {
   if (bounds.isValid()) {
     map.invalidateSize(); // 防止Leaflet缓存的容器尺寸过期导致fitBounds算出的缩放级别不对
     map.fitBounds(bounds, { padding: [40, 40] });
-  }
-}
-
-async function runAgentRecommend() {
-  const input = document.getElementById("agentInput");
-  const question = input.value.trim();
-  if (!question) return;
-
-  const timeline = document.getElementById("agentTimeline");
-  const answerEl = document.getElementById("agentAnswer");
-  timeline.innerHTML = "";
-  answerEl.textContent = "";
-  if (agentRouteLayer) {
-    map.removeLayer(agentRouteLayer);
-    agentRouteLayer = null;
-  }
-
-  const sendBtn = document.getElementById("agentSendBtn");
-  sendBtn.disabled = true;
-  sendBtn.textContent = "思考中...";
-
-  try {
-    const res = await fetch("/api/chat/agent", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      answerEl.textContent = data.detail || "请求失败，请稍后再试。";
-      return;
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop(); // 最后一段可能不完整（还没收全一个事件），留到下次拼接
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
-        handleAgentEvent(JSON.parse(part.slice(6)));
-      }
-    }
-  } catch {
-    answerEl.textContent = "请求失败，请稍后再试。";
-  } finally {
-    sendBtn.disabled = false;
-    sendBtn.textContent = "发送";
   }
 }
 
@@ -998,12 +990,8 @@ async function main() {
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
   });
-  document.getElementById("agentSendBtn").addEventListener("click", runAgentRecommend);
-  document.getElementById("agentInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") runAgentRecommend();
-  });
 
-  appendMessage("bot", "你好，我是活力地图问答助手，已接入DeepSeek。可以问我“武昌区晚上活力怎么样”这类问题，也可以在上面的微博搜索框里搜关键词看真实网友动态。");
+  appendMessage("bot", "你好，我是活力地图问答助手，已接入DeepSeek。可以问我“武昌区晚上活力怎么样”这类问题，也可以问“这个周末去哪玩”这类需要规划路线的开放性问题，也可以在上面的微博搜索框里搜关键词看真实网友动态。");
 }
 
 main();

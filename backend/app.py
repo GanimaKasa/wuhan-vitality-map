@@ -360,22 +360,52 @@ def _resolve_periods_and_rows(intent: dict):
     return rows
 
 
+# "问答"和"智能推荐"原来是两个独立入口，普通用户分不清该用哪个。合并成一个
+# /api/chat：parse_intent能命中时（时段/行政区/高低方向都是关键词能可靠解析的
+# 封闭式问题）走快速路径（单次DeepSeek调用），命不中、或问题带这些开放性信号词
+# （需要多步骤查天气/路线/热点才能回答）时才走agent循环（慢/贵，但SSE流式返回
+# 让用户能看到中间步骤，不会像纯等待一样没有反馈）。
+AGENT_TRIGGER_KEYWORDS = ["推荐", "路线", "规划", "去哪", "怎么玩", "一日游", "行程", "打卡", "周末"]
+
+
+def _should_use_agent(question: str, intent: dict) -> bool:
+    has_signal = bool(intent["periods"] or intent["district"] or intent["direction"])
+    has_open_ended_kw = any(kw in question for kw in AGENT_TRIGGER_KEYWORDS)
+    return has_open_ended_kw or not has_signal
+
+
 @app.post("/api/chat")
 def chat(req: ChatRequest, request: Request):
+    """
+    统一问答入口，SSE流式返回。快速路径只发一个"final"事件（跟agent路径的最终
+    事件同格式），前端不用区分走的是哪条路径，都当成同一套事件流处理；agent路径
+    会先发若干"tool_call"/"tool_result"事件展示中间步骤，再发"final"事件。
+    """
     client_ip = request.client.host if request.client else "unknown"
     _check_rate_limit(client_ip)
 
     intent = retrieval.parse_intent(req.question, KNOWN_DISTRICTS)
-    has_signal = bool(intent["periods"] or intent["district"] or intent["direction"])
+    use_agent = _should_use_agent(req.question, intent)
 
-    if not has_signal:
-        answer = llm_client.answer_question(req.question, {"fallback": True})
-        return {"answer": answer, "highlight_grid_ids": []}
+    def event_stream():
+        if use_agent:
+            for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_map_features):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            return
 
-    rows = _resolve_periods_and_rows(intent)
-    context = {"intent": intent, "rows": rows}
-    answer = llm_client.answer_question(req.question, context)
-    return {"answer": answer, "highlight_grid_ids": [r["grid_id"] for r in rows]}
+        has_signal = bool(intent["periods"] or intent["district"] or intent["direction"])
+        if has_signal:
+            rows = _resolve_periods_and_rows(intent)
+            context = {"intent": intent, "rows": rows}
+            answer = llm_client.answer_question(req.question, context)
+            highlight_grid_ids = [r["grid_id"] for r in rows]
+        else:
+            answer = llm_client.answer_question(req.question, {"fallback": True})
+            highlight_grid_ids = []
+        event = {"type": "final", "answer": answer, "highlight_grid_ids": highlight_grid_ids}
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 WEIBO_POST_COLS = ["text", "lng", "lat", "grid_id", "place_type", "post_time", "like_count"]
@@ -744,27 +774,6 @@ def _extract_map_features(tool_name: str, result: dict) -> dict:
     if tool_name == "route_between" and result.get("_polyline"):
         return {"polylines": [result["_polyline"]]}
     return {}
-
-
-class AgentChatRequest(BaseModel):
-    question: str
-
-
-@app.post("/api/chat/agent")
-def chat_agent(req: AgentChatRequest, request: Request):
-    """
-    案例一/二的智能推荐入口：流式返回agent循环的每一步（正在查询什么工具/工具执行
-    完毕/最终答案），前端用于实时展示进度。每行一个SSE格式的data:事件，用fetch+
-    ReadableStream手动解析（不用EventSource，因为要POST，EventSource只支持GET）。
-    """
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_ip)
-
-    def event_stream():
-        for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_map_features):
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
