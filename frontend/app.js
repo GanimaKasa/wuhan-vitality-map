@@ -755,15 +755,17 @@ function handleChatEvent(event, stepsBox) {
     if (stepsBox.classList.contains("hidden")) stepsBox.remove();
     appendMessage("bot", event.answer);
     const gridIds = event.highlight_grid_ids || [];
-    const hasGrids = gridIds.length > 0;
     const hasRoute = (event.markers && event.markers.length) || (event.polylines && event.polylines.length);
 
-    // 两种信号都有时，谁都不单独飞镜头，最后统一算一个同时框住两者的视野；
-    // 只有一种信号时，各自按原来的方式飞镜头（不改变已有的单一场景行为）。
-    if (hasGrids) highlightGridIds(gridIds, !hasRoute);
-    renderAgentRoute(event.markers, event.polylines, !hasGrids);
-    if (hasGrids && hasRoute) {
-      fitBoundsToGridsAndRoute(gridIds, event.markers, event.polylines);
+    // 路线规划类问题经常会顺带调用get_vitality去挑候选地点，但那只是模型内部
+    // 决策依据，用户想在地图上看到的是"去哪+怎么走"本身——有路线/地点标记时
+    // 就不再高亮活力格网，只画路线+地点标记，避免两种视觉信号混在一起，用户
+    // 分不清地图在强调什么。只有纯数据类问题（没有路线信号）才继续高亮格网。
+    if (hasRoute) {
+      renderAgentRoute(event.markers, event.polylines, true);
+    } else {
+      if (gridIds.length) highlightGridIds(gridIds, true);
+      renderAgentRoute(event.markers, event.polylines, false);
     }
   }
 }
@@ -861,26 +863,6 @@ function renderAgentRoute(markers, polylines, autoFit = true) {
   agentRouteLayer.addTo(map);
   if (autoFit && bounds.length) {
     map.invalidateSize();
-    map.fitBounds(bounds, { padding: [40, 40] });
-  }
-}
-
-// 高亮格网和路线标记/连线都会争抢"地图该看向哪"这个镜头控制权，两种信号同时
-// 出现时（比如"规划下周末游玩路线"这种问法，既查了活力数据又geocode了地点），
-// 不能各自飞一次镜头互相打架——后调用的会覆盖先调用的，先高亮的格网还没看清
-// 镜头就被路线标记抢走了。统一算一个能同时框住格网+路线的视野，只飞一次镜头。
-function fitBoundsToGridsAndRoute(gridIds, markers, polylines) {
-  const bounds = L.latLngBounds([]);
-  for (const gid of gridIds || []) {
-    const pos = gridIdToLatLng.get(gid); // [lng, lat]
-    if (pos) bounds.extend([pos[1], pos[0]]);
-  }
-  for (const m of markers || []) bounds.extend([m.lat, m.lng]);
-  for (const line of polylines || []) {
-    for (const [lng, lat] of line) bounds.extend([lat, lng]);
-  }
-  if (bounds.isValid()) {
-    map.invalidateSize(); // 防止Leaflet缓存的容器尺寸过期导致fitBounds算出的缩放级别不对
     map.fitBounds(bounds, { padding: [40, 40] });
   }
 }
