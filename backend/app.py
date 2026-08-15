@@ -521,7 +521,7 @@ def _tool_get_weather(date: str) -> dict:
 
 
 def _tool_get_vitality(period: str | None = None, district: str | None = None,
-                        order: str = "desc", topn: int = 10) -> dict:
+                        order: str = "desc", topn: int = 10, show_on_map: bool = True) -> dict:
     result = search(district=district, period=period, topn=topn, order=order)
     return {
         "count": result["count"],
@@ -529,6 +529,9 @@ def _tool_get_vitality(period: str | None = None, district: str | None = None,
             {"grid_id": r["grid_id"], "district": r["district"], "value": round(r["value"], 2)}
             for r in result["results"]
         ],
+        # 下划线前缀：不喂给模型（省token，模型也不需要看到自己刚传的这个参数），
+        # 只在_extract_map_features里读，决定这次查询结果要不要在地图上高亮。
+        "_show_on_map": show_on_map,
     }
 
 
@@ -764,8 +767,18 @@ def _extract_map_features(tool_name: str, result: dict) -> dict:
     - markers：geocode查到的地点，前端画点用
     - polylines：route_between查到的真实道路坐标串（存在"_polyline"字段里，
       不会被喂给模型，只在这里、只给地图用）
+
+    get_vitality是否贡献grid_ids由模型每次调用时自己传的show_on_map决定（见
+    _tool_get_vitality），不是"有没有路线就整体二选一"这种前端猜测式的开关——
+    同一轮问答里，模型可能既想展示"活力最高的候选区域"（格网高亮）又想展示
+    "具体怎么走"（路线/地点标记），两者是可以同时出现、各自独立勾选的，也可能
+    只是顺手查一下某区域活力做背景陈述、不想在地图上强调，这时它会传
+    show_on_map=false。多次get_vitality调用会各自按自己的show_on_map决定要不要
+    贡献grid_ids，最终在run_agent_stream里统一extend聚合。
     """
     if tool_name == "get_vitality":
+        if not result.get("_show_on_map", True):
+            return {}
         return {"grid_ids": [r["grid_id"] for r in result.get("results", [])]}
     if tool_name == "search_weibo_hotspots":
         return {"grid_ids": [p["grid_id"] for p in result.get("posts", [])]}
