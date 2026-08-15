@@ -889,7 +889,7 @@ async function runAgentRecommend() {
     answerEl.textContent = "请求失败，请稍后再试。";
   } finally {
     sendBtn.disabled = false;
-    sendBtn.textContent = "推荐";
+    sendBtn.textContent = "发送";
   }
 }
 
