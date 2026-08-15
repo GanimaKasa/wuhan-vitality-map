@@ -30,7 +30,11 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # 顺序，排完顺序才能逐段查真实路线），哪怕同一轮里能并行打包多个工具调用，
 # 光是"发现候选点→排序→逐段查路线"这条链路最少也要4~5轮，5变成了卡在半路
 # 触发"问题太复杂"兜底话术、实际上数据都快查完了的情况（线上实测复现过）。
-MAX_AGENT_STEPS = 8
+# 8曾经够用，改成finish工具收尾后又不够了：以前模型最后一轮直接输出文字回答，
+# 这一轮同时兼顾"给答案"和"结束对话"两件事；现在必须专门再调一次finish，多占
+# 一轮预算——8点打卡+路线这种本来就卡在临界值的复杂问题，实测因此又撞到上限
+# （数据全查完了，只差最后一次finish调用）。调到10留出这个新增的固定开销。
+MAX_AGENT_STEPS = 10
 
 # Render服务器容器默认跑UTC时区，如果直接用date.today()（读服务器本地时间），
 # 北京时间0点~8点这段时间UTC日期还停在"前一天"，会让agent把"今天"算错一整天
@@ -51,21 +55,10 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智�
 - is_workday(date)：判断某天是工作日还是休息日（含法定节假日调休）
 - get_weather(date)：查询某天的天气，仅支持未来3天（含今天），超出范围工具会返回错误，
   此时不要编造天气，如实告诉用户超出预报范围
-- get_vitality(period, district, order, topn, show_on_map)：查询某时段/行政区的活力预测排名，
-  period是"工作日_日间"这种格式的时段名（可选），order是desc(活力从高到低)或asc(从低到高)。
-  show_on_map控制这次查到的格网要不要在地图上高亮给用户看：如果这次查询结果本身就是你要
-  推荐/展示的具体地点（比如"去哪玩""哪里最热闹"这类问题的核心答案），保持默认true；如果只是
-  顺手查一下某区域大概活力水平，当成背景信息在回答里提一句（不是这轮的核心推荐依据），传false，
-  避免地图上出现跟最终建议关系不大的格网高亮。同一轮问答可以多次调用，每次的show_on_map
-  互不影响，会分别按各自的设置决定是否加入最终地图展示——不是"只要用了路线工具就不显示格网"
-  这种非黑即白的规则，格网高亮和地点/路线标记可以同时出现，也可以只出现一种，由你判断决定。
-- search_weibo_hotspots(keyword, top_n, show_on_map)：语义检索微博热点，看看大家在讨论/
-  去哪儿玩，返回的是真实脱敏微博样本，不是精确统计。show_on_map跟get_vitality同一个逻辑：
-  如果这次检索到的帖子所在格网就是你要展示给用户的地点（比如直接引用这些真实动态作为
-  推荐依据回答"哪里热闹"），保持默认true；如果只是先摸个底、后面还会用geocode把结论提炼成
-  几个具体打卡点（比如"推荐N个打卡点+规划路线"这类问题里，检索热点只是找灵感的中间步骤，
-  不是最终要展示的格网），传false——不然这些格网会跟最终geocode出来的具体地点混在一起，
-  地图上出现一大片跟最终推荐无关的高亮，让用户看不出你到底在强调什么
+- get_vitality(period, district, order, topn)：查询某时段/行政区的活力预测排名，
+  period是"工作日_日间"这种格式的时段名（可选），order是desc(活力从高到低)或asc(从低到高)
+- search_weibo_hotspots(keyword, top_n)：语义检索微博热点，看看大家在讨论/去哪儿玩，
+  返回的是真实脱敏微博样本，不是精确统计
 - web_search(query)：通用网页搜索，微博数据/城市活力数据都覆盖不到的开放性信息（比如具体
   某个新开业地点的介绍、网友推荐的打卡点名称）用这个兜底，搜索结果可能不够准确，回答时
   要提醒用户"仅供参考"
@@ -79,12 +72,23 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智�
   （mode可选driving驾车/walking步行/transit公交地铁），按plan_route_order排好的顺序，
   对相邻两点逐段调用这个工具拿真实路线，不要跳过这一步直接用直线距离当成真实路程告诉用户
 
+结束对话：
+- 你必须调用finish(answer, highlight_grid_ids)工具来结束对话、给出最终回答，不要不调用
+  任何工具、直接用一段文字结束——那样地图不会有任何反馈。
+- answer是给用户看的最终回答内容，口语化、有理有据，直接给结论和具体推荐地点/时段/路线，
+  不要罗列"我调用了什么工具"这种过程。
+- highlight_grid_ids是可选的格网编号列表：查数据和决定地图上要强调哪些格网是两件独立的
+  事——调用get_vitality/search_weibo_hotspots只是获取信息，不代表这些格网就一定要展示。
+  等你想清楚了整个答案，再从这一路查到的候选格网里（可以跨多次调用挑选），主动选出真正
+  是这轮推荐依据的那些格网，列进highlight_grid_ids；如果这轮回答不需要强调任何格网（比如
+  纯路线规划、或者查过的活力/热点数据只是背景参考，没有直接构成你的推荐结论），传空数组，
+  不要为了"有内容"而把无关的格网也塞进去。geocode/route_between查到的地点和路线不用你
+  操心，会自动显示在地图上。
+
 要求：
 - 先想清楚需要哪些信息再决定调用顺序，不要瞎调用不相关的工具
 - 工具报错时（比如日期超出天气预报范围、天气/搜索服务不可用、地名查不到坐标）如实告诉用户，
   不要编造数据
-- 最终回答要口语化、有理有据，直接给结论和具体推荐地点/时段/路线，不要罗列"我调用了什么工具"
-  这种过程
 - 不要说你是AI，不需要开场白
 """
 
@@ -136,14 +140,6 @@ AGENT_TOOLS_SCHEMA = [
                         "description": "desc=活力从高到低（默认），asc=活力从低到高",
                     },
                     "topn": {"type": "integer", "description": "返回条数，默认10"},
-                    "show_on_map": {
-                        "type": "boolean",
-                        "description": (
-                            "这次查到的格网要不要在地图上高亮展示给用户。默认true——如果查询结果"
-                            "是你要推荐/展示的具体地点就保持默认；如果只是顺手查个背景信息、不是这轮"
-                            "核心推荐依据，传false，避免地图上出现跟最终建议关系不大的格网高亮。"
-                        ),
-                    },
                 },
                 "required": [],
             },
@@ -159,14 +155,6 @@ AGENT_TOOLS_SCHEMA = [
                 "properties": {
                     "keyword": {"type": "string", "description": "检索关键词，如“武汉美食”“夜生活”"},
                     "top_n": {"type": "integer", "description": "返回条数，默认20"},
-                    "show_on_map": {
-                        "type": "boolean",
-                        "description": (
-                            "这次检索到的帖子所在格网要不要在地图上高亮。默认true——如果这些真实"
-                            "动态本身就是你要展示的地点就保持默认；如果只是找灵感的中间步骤、后面"
-                            "还会用geocode把结论提炼成具体打卡点，传false，避免跟最终地点混在一起。"
-                        ),
-                    },
                 },
                 "required": ["keyword"],
             },
@@ -252,6 +240,37 @@ AGENT_TOOLS_SCHEMA = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish",
+            "description": (
+                "结束对话并给出最终回答。收集完所有需要的信息、想清楚要怎么回答用户后，"
+                "必须调用这个工具，不要不调用任何工具就直接用文字回复结束对话。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "string",
+                        "description": "给用户看的最终回答，口语化、有理有据，直接给结论和具体推荐",
+                    },
+                    "highlight_grid_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "要在地图上高亮的格网编号。从你之前调用get_vitality/"
+                            "search_weibo_hotspots等工具查到的候选格网里，挑出真正构成这轮"
+                            "推荐依据的那些（可以跨多次调用挑选，不限于最后一次）；如果不需要"
+                            "强调任何格网（比如纯路线规划，或者查过的数据只是背景参考、不是"
+                            "具体推荐结论），传空数组，不要为了有内容而塞进无关格网。"
+                        ),
+                    },
+                },
+                "required": ["answer"],
+            },
+        },
+    },
 ]
 
 TOOL_DISPLAY_NAMES = {
@@ -288,29 +307,41 @@ def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
     """
     question: 用户原始问题
     tool_impls: {工具名: 可调用对象}，由app.py传入，实际执行逻辑在app.py里
-    extract_map_features: (tool_name, result_dict) -> {"grid_ids":[...], "markers":[...],
-        "polylines":[...]}，从工具结果里挑出能在地图上画的东西，由app.py传入（因为哪个
-        字段对应什么地图元素跟数据结构强相关）
+    extract_map_features: (tool_name, result_dict) -> {"markers":[...], "polylines":[...]}，
+        从工具结果里挑出能在地图上画的东西，由app.py传入（因为哪个字段对应什么地图元素
+        跟数据结构强相关）。不再产出grid_ids——格网高亮不是数据查询工具的自动副作用，
+        而是模型调用finish时显式挑选的，见下面的说明。
 
     生成一系列事件dict：
     - {"type": "tool_call", "tool": name, "label": ...}
     - {"type": "tool_result", "tool": name, "label": ...}
     - {"type": "final", "answer": str, "highlight_grid_ids": [...], "markers": [...], "polylines": [...]}
+
+    highlight_grid_ids只来自模型显式调用finish(answer, highlight_grid_ids)时传的参数，
+    不再从get_vitality/search_weibo_hotspots的查询结果里自动收集。踩过的坑：早期版本
+    是"只要调用了这两个工具，返回里的格网就无条件全部高亮"，后来改成让模型在每次调用时
+    传一个show_on_map开关——但这仍然把"要不要展示"这个决策捆在"查询数据的那一刻"，
+    模型经常在还没想清楚最终答案前就要预判，容易判断失误（生产环境复现过：agent反复调
+    search_weibo_hotspots"找灵感"，每次格网都被展示，跟最终推荐的具体地点毫无关系）。
+    现在彻底解耦：get_vitality/search_weibo_hotspots只是单纯的数据查询工具，调用它们
+    不会自动产生任何地图效果；等模型想清楚整个答案、调用finish结束对话时，才从它这一路
+    看到的候选格网里主动挑选真正要展示的那些。markers/polylines不需要这套机制——
+    geocode/route_between的返回结果本身就是"一个具体地点/一段具体路线"，调用即代表
+    要展示，没有"顺手查个背景信息"这种歧义，继续在工具执行时自动收集。
     """
     today = _today_str()
     messages = [
         {"role": "system", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(today=today)},
         {"role": "user", "content": question},
     ]
-    highlight_grid_ids: list[int] = []
     markers: list[dict] = []
     polylines: list[list] = []
 
-    def _final(answer: str) -> dict:
+    def _final(answer: str, highlight_grid_ids=None) -> dict:
         return {
             "type": "final",
             "answer": answer,
-            "highlight_grid_ids": highlight_grid_ids,
+            "highlight_grid_ids": highlight_grid_ids or [],
             "markers": markers,
             "polylines": polylines,
         }
@@ -324,18 +355,28 @@ def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
+            # 模型没有调用finish、直接用文字结束——这是对系统提示词的偏离（属于兜底
+            # 容错，不是预期路径），此时没有显式挑选过的格网，highlight_grid_ids留空
+            # 比瞎猜要更安全。
             yield _final(msg.get("content") or "抱歉，我没能给出有效回答，换个问法再试试？")
             return
 
         messages.append(msg)
         for call in tool_calls:
             name = call["function"]["name"]
-            label = TOOL_DISPLAY_NAMES.get(name, name)
             try:
                 args = json.loads(call["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
 
+            if name == "finish":
+                answer = args.get("answer") or "抱歉，我没能给出有效回答，换个问法再试试？"
+                raw_grid_ids = args.get("highlight_grid_ids") or []
+                grid_ids = [g for g in raw_grid_ids if isinstance(g, int)]
+                yield _final(answer, grid_ids)
+                return
+
+            label = TOOL_DISPLAY_NAMES.get(name, name)
             yield {"type": "tool_call", "tool": name, "label": label}
 
             impl = tool_impls.get(name)
@@ -349,7 +390,6 @@ def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
 
             try:
                 features = extract_map_features(name, result) or {}
-                highlight_grid_ids.extend(features.get("grid_ids", []))
                 markers.extend(features.get("markers", []))
                 polylines.extend(features.get("polylines", []))
             except Exception:

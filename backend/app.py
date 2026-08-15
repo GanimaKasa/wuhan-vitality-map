@@ -521,7 +521,7 @@ def _tool_get_weather(date: str) -> dict:
 
 
 def _tool_get_vitality(period: str | None = None, district: str | None = None,
-                        order: str = "desc", topn: int = 10, show_on_map: bool = True) -> dict:
+                        order: str = "desc", topn: int = 10) -> dict:
     result = search(district=district, period=period, topn=topn, order=order)
     return {
         "count": result["count"],
@@ -529,13 +529,10 @@ def _tool_get_vitality(period: str | None = None, district: str | None = None,
             {"grid_id": r["grid_id"], "district": r["district"], "value": round(r["value"], 2)}
             for r in result["results"]
         ],
-        # 下划线前缀：不喂给模型（省token，模型也不需要看到自己刚传的这个参数），
-        # 只在_extract_map_features里读，决定这次查询结果要不要在地图上高亮。
-        "_show_on_map": show_on_map,
     }
 
 
-def _tool_search_weibo_hotspots(keyword: str, top_n: int = 20, show_on_map: bool = True) -> dict:
+def _tool_search_weibo_hotspots(keyword: str, top_n: int = 20) -> dict:
     result = weibo_search(keyword=keyword, top_n=top_n)
     posts = result["posts"][:10]  # 只给模型看前10条，控制token成本
     return {
@@ -550,9 +547,6 @@ def _tool_search_weibo_hotspots(keyword: str, top_n: int = 20, show_on_map: bool
             }
             for p in posts
         ],
-        # 跟get_vitality的_show_on_map是同一套设计：这次检索到的帖子所在格网要不要
-        # 在地图上高亮，由模型每次调用时自己决定，不喂给模型本身（省token）。
-        "_show_on_map": show_on_map,
     }
 
 
@@ -766,33 +760,18 @@ AGENT_TOOL_IMPLS = {
 def _extract_map_features(tool_name: str, result: dict) -> dict:
     """
     从工具结果里挑出能在地图上画出来的东西：
-    - grid_ids：城市活力/微博热点命中的格网，前端高亮用
     - markers：geocode查到的地点，前端画点用
     - polylines：route_between查到的真实道路坐标串（存在"_polyline"字段里，
       不会被喂给模型，只在这里、只给地图用）
 
-    get_vitality和search_weibo_hotspots是否贡献grid_ids都由模型每次调用时自己传的
-    show_on_map决定（分别见_tool_get_vitality/_tool_search_weibo_hotspots），不是
-    "有没有路线就整体二选一"这种前端猜测式的开关——同一轮问答里，模型可能既想展示
-    "候选区域"（格网高亮）又想展示"具体怎么走"（路线/地点标记），两者可以同时出现、
-    各自独立勾选，也可能只是顺手查一下背景信息、不想在地图上强调，这时会传
-    show_on_map=false。**踩过的坑**：search_weibo_hotspots以前没有这个开关，"推荐
-    打卡点+规划路线"这类问题里agent经常会先调好几次search_weibo_hotspots找灵感
-    （每次最多10个格网），这些格网跟最终geocode出来的具体打卡点毫无关系，却会
-    无条件全部进highlight_grid_ids，导致地图上一大片跟答案不相关的格网被高亮，
-    看起来像是"高亮没修好"——实际是search_weibo_hotspots漏了同款开关，不是
-    get_vitality那次修复本身有问题。同一个逻辑必须两个数据类工具一起补，不能只挑
-    用户这次点名的那一个改。多次调用会各自按自己的show_on_map决定要不要贡献
-    grid_ids，最终在run_agent_stream里统一extend聚合。
+    不产出grid_ids——格网高亮不是get_vitality/search_weibo_hotspots这类数据查询工具
+    调用后的自动副作用，而是模型显式调用finish(answer, highlight_grid_ids)时主动挑选
+    的，见agent_client.run_agent_stream里的说明。之前尝试过在这两个工具上加
+    show_on_map开关、让模型每次调用时预判"这次结果算不算数"，但那仍然把"要不要在地图
+    上展示"这个决策捆在"查询数据的那一刻"，模型经常判断失误——已经改成在finish阶段
+    统一决定，这里就不需要（也不应该）再从get_vitality/search_weibo_hotspots的结果
+    里提取grid_ids了。
     """
-    if tool_name == "get_vitality":
-        if not result.get("_show_on_map", True):
-            return {}
-        return {"grid_ids": [r["grid_id"] for r in result.get("results", [])]}
-    if tool_name == "search_weibo_hotspots":
-        if not result.get("_show_on_map", True):
-            return {}
-        return {"grid_ids": [p["grid_id"] for p in result.get("posts", [])]}
     if tool_name == "geocode" and "lng" in result and "lat" in result:
         return {"markers": [{"name": result.get("name"), "lng": result["lng"], "lat": result["lat"]}]}
     if tool_name == "route_between" and result.get("_polyline"):
