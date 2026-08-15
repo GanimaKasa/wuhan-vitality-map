@@ -13,63 +13,209 @@ html, body { height: 100%; margin: 0; font-family: "Microsoft YaHei", "Segoe UI"
 
 #app {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
 }
 
-#sidebar {
-  width: 340px;
+#topBar {
   flex-shrink: 0;
   background: var(--sidebar-bg);
   color: var(--sidebar-fg);
-  padding: 20px;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+}
+#topBar h1 { font-size: 16px; margin: 0 0 2px; }
+.subtitle { font-size: 12px; color: #9aa3b2; margin: 0; line-height: 1.5; }
+
+#mainRow {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ==============================================================
+   应用坞（栏目1）：圆角正方形图标+名称的应用启动器，初始只有"添加应用"
+   按钮，用户从应用商店（栏目2）拖拽/点击添加想用的功能进来。
+   ============================================================== */
+#dock {
+  width: 92px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  border-right: 1px solid var(--border);
+  padding: 16px 8px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  align-items: center;
+  gap: 12px;
 }
+#dock.drag-over { background: color-mix(in srgb, var(--sidebar-bg) 80%, var(--accent) 20%); }
 
-#sidebar h1 { font-size: 18px; margin: 0 0 4px; }
-.subtitle { font-size: 12px; color: #9aa3b2; margin: 0 0 8px; line-height: 1.5; }
+.dock-apps { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
 
-.panel {
+.dock-icon { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; cursor: pointer; position: relative; }
+.dock-icon-square {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
   background: var(--panel-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 23px;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.dock-icon:hover .dock-icon-square { border-color: var(--accent); transform: translateY(-1px); }
+.dock-icon.active .dock-icon-square { border-color: var(--accent); background: var(--accent); }
+.dock-icon-label {
+  font-size: 10.5px;
+  color: #9aa3b2;
+  text-align: center;
+  line-height: 1.2;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-icon.active .dock-icon-label { color: var(--sidebar-fg); font-weight: 600; }
+
+.dock-remove-btn {
+  position: absolute;
+  top: -4px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-hot);
+  color: white;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  cursor: pointer;
+}
+.dock-icon:hover .dock-remove-btn { opacity: 1; }
+
+.dock-add-btn {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  border: 2px dashed var(--border);
+  background: transparent;
+  color: #7d879a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.dock-add-btn:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+
+/* ==============================================================
+   浮出面板（栏目2）：应用商店(picker)和单个应用的专用功能面板共用这个
+   容器，同一时刻只显示其中一个，靠JS切换.hidden。
+   ============================================================== */
+#flyout {
+  width: 380px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  overflow: hidden;
 }
-
-.panel label { font-size: 12px; color: #9aa3b2; }
-
-.collapsible-panel { padding: 0; }
-.panel-summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 14px;
-  font-size: 13px;
-  font-weight: 600;
+.flyout-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  user-select: none;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
 }
-.panel-summary::-webkit-details-marker { display: none; }
-.panel-summary::after {
-  content: "▾";
-  font-size: 11px;
-  color: #7d879a;
-  transition: transform 0.15s ease;
+.flyout-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.collapsible-panel[open] > .panel-summary::after { transform: rotate(180deg); }
-.collapsible-panel .panel-body {
+.flyout-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 0 14px 14px;
+  gap: 16px;
 }
+
+/* 应用商店：左边分类栏（数据/工具/其他，不是下拉菜单，点击直接切换），
+   右边当前分类下的应用网格。 */
+.app-picker { display: flex; gap: 14px; }
+.picker-categories { display: flex; flex-direction: column; gap: 6px; width: 60px; flex-shrink: 0; }
+.picker-cat-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #9aa3b2;
+  padding: 8px 4px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  text-align: center;
+  cursor: pointer;
+}
+.picker-cat-btn:hover { background: var(--panel-bg); }
+.picker-cat-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+.picker-app-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  align-content: start;
+}
+.app-icon-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; position: relative; }
+.app-icon-square {
+  width: 58px;
+  height: 58px;
+  border-radius: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}
+.app-icon-btn:hover .app-icon-square { border-color: var(--accent); transform: translateY(-2px); }
+.app-icon-btn.in-dock .app-icon-square { border-color: var(--accent); }
+.app-icon-label { font-size: 11.5px; color: var(--sidebar-fg); text-align: center; }
+.in-dock-badge {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+.picker-empty-hint { grid-column: 1 / -1; font-size: 12.5px; color: #7d879a; padding: 24px 0; text-align: center; }
+
+/* 应用的专用功能面板（点击栏目1图标后展示的内容），复用原来的panel-subsection
+   排版风格，但不再套.panel/.collapsible-panel的卡片+summary折叠壳。 */
+.app-panel { display: flex; flex-direction: column; gap: 16px; }
+.app-panel label { font-size: 12px; color: #9aa3b2; }
+
 .panel-subsection {
   display: flex;
   flex-direction: column;
@@ -78,6 +224,23 @@ html, body { height: 100%; margin: 0; font-family: "Microsoft YaHei", "Segoe UI"
   border-top: 1px solid var(--border);
 }
 .panel-subsection:first-child { padding-top: 0; border-top: none; }
+
+/* 微博数据面板内部子标签（热点搜索/全部POI），条理清晰地分开两套原本
+   平铺在一起的控件。 */
+.subtab-bar { display: flex; gap: 6px; }
+.subtab-btn {
+  flex: 1;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  color: #9aa3b2;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.subtab-btn:hover { border-color: var(--accent); }
+.subtab-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.subtab-panel { display: flex; flex-direction: column; gap: 14px; }
 
 .checkbox-row {
   display: flex;
@@ -114,7 +277,11 @@ button:hover { background: var(--accent); border-color: var(--accent); }
 
 .hint { font-size: 12px; color: #7d879a; min-height: 16px; }
 
-.hidden { display: none; }
+/* !important是刻意的：.hidden是个工具类，用来隐藏各种本身就带display:flex/grid
+   声明的组件（如.all-poi-controls、#flyout），不加!important的话谁在样式表里
+   声明得晚谁赢，会出现"加了hidden类却还是显示"的诡异bug——这个类唯一的职责就是
+   "不管别的规则怎么样，都必须隐藏"，理应享有最高优先级覆盖。 */
+.hidden { display: none !important; }
 
 .all-poi-controls {
   display: flex;
@@ -167,7 +334,10 @@ input[type="date"] { color-scheme: dark; }
 }
 .agent-step.done { color: var(--sidebar-fg); border-color: var(--accent); }
 
-.chat-panel { flex: 1; min-height: 260px; }
+/* 智能问答面板要撑满浮出面板的剩余高度，消息列表内部单独滚动，不能让
+   整个flyout-body一起滚动（不然输入框会被滚没了）。 */
+#panel-chat.app-panel { flex: 1; min-height: 0; }
+.chat-panel-inner { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 
 #chatMessages {
   flex: 1;
@@ -177,7 +347,6 @@ input[type="date"] { color-scheme: dark; }
   gap: 8px;
   padding-right: 4px;
   min-height: 150px;
-  max-height: 340px;
 }
 
 .msg { padding: 8px 10px; border-radius: 8px; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }

@@ -8,129 +8,158 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.css" />
-<link rel="stylesheet" href="style.css?v=12" />
+<link rel="stylesheet" href="style.css?v=13" />
 </head>
 <body>
 <div id="app">
-  <aside id="sidebar">
+  <header id="topBar">
     <h1>武汉城市活力地图</h1>
     <p class="subtitle">基于8模态多模态模型的三环内250m格网活力预测（原型demo）</p>
+  </header>
 
-    <details id="vitalityPanel" class="panel collapsible-panel">
-      <summary class="panel-summary">🏙️ 城市活力（时段 · 行政区筛选）</summary>
-      <div class="panel-body">
-        <div class="panel-subsection">
-          <label for="periodSelect">时段</label>
-          <select id="periodSelect"></select>
-          <label class="checkbox-row">
-            <input id="fillToggle" type="checkbox" />
-            仅显示格网边界（隐藏填充色）
-          </label>
-          <label class="checkbox-row">
-            <input id="borderToggle" type="checkbox" />
-            隐藏格网边界（连边框也不显示）
-          </label>
-          <label class="checkbox-row">
-            <input id="studyAreaBoundaryToggle" type="checkbox" />
-            只显示研究区域边界（三环整体轮廓，不逐格网画框）
-          </label>
-          <label class="checkbox-row">
-            <input id="vitality3DToggle" type="checkbox" />
-            🧊 3D柱状图（柱高=当前时段活力值）
-          </label>
-        </div>
+  <div id="mainRow">
+    <aside id="dock">
+      <div id="dockApps" class="dock-apps"></div>
+      <button id="addAppBtn" class="dock-add-btn" title="添加应用">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" stroke-width="2"/>
+          <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" stroke-width="2"/>
+          <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" stroke-width="2"/>
+          <path d="M17 13v8M13 17h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </aside>
 
-        <div class="panel-subsection">
-          <label for="districtInput">按行政区搜索</label>
-          <input id="districtInput" type="text" placeholder="如：武昌区" list="districtList" />
-          <datalist id="districtList"></datalist>
-          <div class="btn-row">
-            <button id="topHighBtn">活力最高Top10</button>
-            <button id="topLowBtn">活力最低Top10</button>
-            <button id="clearFilterBtn">清除筛选</button>
+    <aside id="flyout" class="hidden">
+      <div class="flyout-header">
+        <span id="flyoutTitle">添加应用</span>
+        <button id="flyoutCloseBtn" class="flyout-close" title="关闭">×</button>
+      </div>
+      <div class="flyout-body">
+
+        <div id="appPicker" class="app-picker">
+          <div class="picker-categories">
+            <button class="picker-cat-btn" data-cat="data">数据</button>
+            <button class="picker-cat-btn" data-cat="tools">工具</button>
+            <button class="picker-cat-btn" data-cat="other">其他</button>
           </div>
-          <div id="searchResultInfo" class="hint"></div>
+          <div id="pickerAppGrid" class="picker-app-grid"></div>
         </div>
-      </div>
-    </details>
 
-    <details class="panel collapsible-panel">
-      <summary class="panel-summary">📅 日历 · 天气</summary>
-      <div class="panel-body">
-        <div class="panel-subsection">
-          <label for="calendarDateInput">选择日期</label>
-          <input id="calendarDateInput" type="date" />
-          <div id="calendarResult" class="calendar-result"></div>
-        </div>
-      </div>
-    </details>
-
-    <details class="panel collapsible-panel">
-      <summary class="panel-summary">📡 微博热点搜索（语义检索）</summary>
-      <div class="panel-body">
-        <div class="panel-subsection">
-          <label for="weiboSearchInput">微博热点搜索（语义检索，真实文本已脱敏）</label>
-          <input id="weiboSearchInput" type="text" placeholder="如：武汉旅游" />
-          <label for="weiboTopNInput" class="weibo-topn-label">按相关度+热度综合排序，取前N条展示</label>
-          <input id="weiboTopNInput" type="number" min="1" max="2000" value="150" />
-          <div class="btn-row">
-            <button id="weiboSearchBtn">搜索</button>
-            <button id="weiboClearBtn">清除标记</button>
+        <div id="panel-vitality" class="app-panel hidden">
+          <div class="panel-subsection">
+            <label for="periodSelect">时段</label>
+            <select id="periodSelect"></select>
+            <label class="checkbox-row">
+              <input id="fillToggle" type="checkbox" />
+              仅显示格网边界（隐藏填充色）
+            </label>
+            <label class="checkbox-row">
+              <input id="borderToggle" type="checkbox" />
+              隐藏格网边界（连边框也不显示）
+            </label>
+            <label class="checkbox-row">
+              <input id="studyAreaBoundaryToggle" type="checkbox" />
+              只显示研究区域边界（三环整体轮廓，不逐格网画框）
+            </label>
+            <label class="checkbox-row">
+              <input id="vitality3DToggle" type="checkbox" />
+              🧊 3D柱状图（柱高=当前时段活力值）
+            </label>
           </div>
-          <label class="checkbox-row">
-            <input id="weiboSortByLikesToggle" type="checkbox" />
-            按点赞数从高到低排序（默认按相关度+热度综合排序）
-          </label>
-          <div id="weiboSearchInfo" class="hint"></div>
-          <div id="weiboResultList" class="weibo-result-list"></div>
-        </div>
-      </div>
-    </details>
 
-    <details id="allPoiPanel" class="panel collapsible-panel">
-      <summary class="panel-summary">📍 全部微博POI（类别 · 点赞筛选）</summary>
-      <div class="panel-body">
-        <div class="panel-subsection">
-          <label class="checkbox-row">
-            <input id="allPoiToggle" type="checkbox" />
-            显示全部微博POI（首次开启会拉取全量点位，约9.7万条，地图上聚合展示）
-          </label>
-          <div id="allPoiControls" class="all-poi-controls hidden">
-            <label for="poiCategorySelect">按类别筛选（不选=全部类别）</label>
-            <select id="poiCategorySelect" multiple size="6"></select>
-            <label for="poiLikeThresholdInput">最低点赞数：<span id="poiLikeThresholdValue">0</span></label>
-            <input id="poiLikeThresholdInput" type="range" min="0" max="0" value="0" />
-            <div id="allPoiInfo" class="hint"></div>
+          <div class="panel-subsection">
+            <label for="districtInput">按行政区搜索</label>
+            <input id="districtInput" type="text" placeholder="如：武昌区" list="districtList" />
+            <datalist id="districtList"></datalist>
+            <div class="btn-row">
+              <button id="topHighBtn">活力最高Top10</button>
+              <button id="topLowBtn">活力最低Top10</button>
+              <button id="clearFilterBtn">清除筛选</button>
+            </div>
+            <div id="searchResultInfo" class="hint"></div>
           </div>
-          <label class="checkbox-row">
-            <input id="weibo3DToggle" type="checkbox" />
-            🧊 3D柱状图（柱高=该格网POI密度，受上面类别/点赞筛选影响）
-          </label>
         </div>
-      </div>
-    </details>
 
-    <section class="panel chat-panel">
-      <label>大语言模型问答（已接入DeepSeek，可以问活力数据，也可以问路线推荐）</label>
-      <div id="chatMessages"></div>
-      <div class="chat-input-row">
-        <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样 / 这个周末去哪玩" />
-        <button id="chatSendBtn">发送</button>
-      </div>
-    </section>
-  </aside>
+        <div id="panel-weibo" class="app-panel hidden">
+          <div class="subtab-bar">
+            <button class="subtab-btn active" data-subtab="hotsearch">🔍 热点搜索</button>
+            <button class="subtab-btn" data-subtab="allpoi">📍 全部POI</button>
+          </div>
 
-  <main id="mapContainer"></main>
-  <main id="map3dContainer" class="hidden">
-    <button id="reset3DViewBtn" class="map3d-reset-btn">🧭 复位视角</button>
-    <div class="map3d-hint">🖱️ 左键拖拽平移 · 右键（或Ctrl+左键）拖拽旋转/俯仰 · 滚轮缩放</div>
-  </main>
+          <div id="subtab-hotsearch" class="subtab-panel">
+            <div class="panel-subsection">
+              <label for="weiboSearchInput">语义检索关键词（真实文本已脱敏）</label>
+              <input id="weiboSearchInput" type="text" placeholder="如：武汉旅游" />
+              <label for="weiboTopNInput" class="weibo-topn-label">按相关度+热度综合排序，取前N条展示</label>
+              <input id="weiboTopNInput" type="number" min="1" max="2000" value="150" />
+              <div class="btn-row">
+                <button id="weiboSearchBtn">搜索</button>
+                <button id="weiboClearBtn">清除标记</button>
+              </div>
+              <label class="checkbox-row">
+                <input id="weiboSortByLikesToggle" type="checkbox" />
+                按点赞数从高到低排序（默认按相关度+热度综合排序）
+              </label>
+              <div id="weiboSearchInfo" class="hint"></div>
+              <div id="weiboResultList" class="weibo-result-list"></div>
+            </div>
+          </div>
+
+          <div id="subtab-allpoi" class="subtab-panel hidden">
+            <div class="panel-subsection">
+              <label class="checkbox-row">
+                <input id="allPoiToggle" type="checkbox" />
+                显示全部微博POI（首次开启会拉取全量点位，约9.7万条，地图上聚合展示）
+              </label>
+              <div id="allPoiControls" class="all-poi-controls hidden">
+                <label for="poiCategorySelect">按类别筛选（不选=全部类别）</label>
+                <select id="poiCategorySelect" multiple size="6"></select>
+                <label for="poiLikeThresholdInput">最低点赞数：<span id="poiLikeThresholdValue">0</span></label>
+                <input id="poiLikeThresholdInput" type="range" min="0" max="0" value="0" />
+                <div id="allPoiInfo" class="hint"></div>
+              </div>
+              <label class="checkbox-row">
+                <input id="weibo3DToggle" type="checkbox" />
+                🧊 3D柱状图（柱高=该格网POI密度，受上面类别/点赞筛选影响）
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div id="panel-weather" class="app-panel hidden">
+          <div class="panel-subsection">
+            <label for="calendarDateInput">选择日期</label>
+            <input id="calendarDateInput" type="date" />
+            <div id="calendarResult" class="calendar-result"></div>
+          </div>
+        </div>
+
+        <div id="panel-chat" class="app-panel hidden">
+          <div class="chat-panel-inner">
+            <div id="chatMessages"></div>
+            <div class="chat-input-row">
+              <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样 / 这个周末去哪玩" />
+              <button id="chatSendBtn">发送</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <main id="mapContainer"></main>
+    <main id="map3dContainer" class="hidden">
+      <button id="reset3DViewBtn" class="map3d-reset-btn">🧭 复位视角</button>
+      <div class="map3d-hint">🖱️ 左键拖拽平移 · 右键（或Ctrl+左键）拖拽旋转/俯仰 · 滚轮缩放</div>
+    </main>
+  </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
-<script src="app.js?v=24"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>

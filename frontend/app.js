@@ -885,8 +885,243 @@ function fitBoundsToGridsAndRoute(gridIds, markers, polylines) {
   }
 }
 
+// ==============================================================
+// 应用坞（栏目1）+ 浮出面板（栏目2：应用商店/单个应用的专用面板）
+// 初始栏目1只有"添加应用"按钮，点开后左边是分类栏（数据/工具/其他），
+// 右边是该分类下的应用网格，点击或拖拽到栏目1即可固定。已固定的应用
+// 用localStorage记住，下次打开网站还在。
+// ==============================================================
+const APPS = [
+  { id: "vitality", name: "城市活力", icon: "🏙️", category: "data" },
+  { id: "weibo", name: "微博数据", icon: "📡", category: "data" },
+  { id: "weather", name: "天气", icon: "⛅", category: "tools" },
+  { id: "chat", name: "智能问答", icon: "💬", category: "tools" },
+];
+const CATEGORIES = [
+  { id: "data", name: "数据" },
+  { id: "tools", name: "工具" },
+  { id: "other", name: "其他" },
+];
+const DOCK_STORAGE_KEY = "vitalityMapDockApps_v1";
+
+// 应用面板被切走/关闭时，把它开着的地图图层类开关自动关掉——不然面板看不见了
+// 但地图上的3D柱子/全量POI图层还留着，用户也没法在浮出面板里找到入口去关。
+const APP_CLEANUP = {
+  vitality: () => {
+    turnOffCheckbox("vitality3DToggle");
+    turnOffCheckbox("studyAreaBoundaryToggle");
+  },
+  weibo: () => {
+    turnOffCheckbox("allPoiToggle");
+    turnOffCheckbox("weibo3DToggle");
+  },
+};
+
+function turnOffCheckbox(id) {
+  const cb = document.getElementById(id);
+  if (cb && cb.checked) {
+    cb.checked = false;
+    cb.dispatchEvent(new Event("change"));
+  }
+}
+
+let dockAppIds = [];
+let activeAppId = null; // 当前浮出面板展示的是哪个应用；null表示浮出面板关闭或展示的是应用商店
+
+function loadDockAppIds() {
+  try {
+    const raw = localStorage.getItem(DOCK_STORAGE_KEY);
+    if (raw) return JSON.parse(raw).filter((id) => APPS.some((a) => a.id === id));
+  } catch {
+    // localStorage不可用或数据损坏，退回空坞
+  }
+  return [];
+}
+
+function saveDockAppIds() {
+  try {
+    localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(dockAppIds));
+  } catch {
+    // 存储失败不影响当前会话使用，忽略即可
+  }
+}
+
+function cleanupActiveApp() {
+  if (activeAppId && APP_CLEANUP[activeAppId]) APP_CLEANUP[activeAppId]();
+}
+
+function renderDock() {
+  const container = document.getElementById("dockApps");
+  container.innerHTML = "";
+  for (const appId of dockAppIds) {
+    const app = APPS.find((a) => a.id === appId);
+    if (!app) continue;
+    const icon = document.createElement("div");
+    icon.className = "dock-icon" + (activeAppId === appId ? " active" : "");
+    icon.draggable = true;
+    icon.dataset.appId = app.id;
+    icon.innerHTML =
+      `<div class="dock-icon-square">${app.icon}<span class="dock-remove-btn" title="从坞中移除">×</span></div>` +
+      `<div class="dock-icon-label">${app.name}</div>`;
+    icon.addEventListener("click", (e) => {
+      if (e.target.closest(".dock-remove-btn")) return;
+      openAppPanel(app.id);
+    });
+    icon.querySelector(".dock-remove-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      removeFromDock(app.id);
+    });
+    icon.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", app.id);
+      e.dataTransfer.effectAllowed = "move";
+    });
+    container.appendChild(icon);
+  }
+}
+
+function addToDock(appId) {
+  if (dockAppIds.includes(appId)) return;
+  dockAppIds.push(appId);
+  saveDockAppIds();
+  renderDock();
+  refreshPickerGridInDockBadges();
+}
+
+function removeFromDock(appId) {
+  dockAppIds = dockAppIds.filter((id) => id !== appId);
+  saveDockAppIds();
+  if (activeAppId === appId) {
+    closeFlyout();
+  } else {
+    renderDock();
+  }
+  refreshPickerGridInDockBadges();
+}
+
+function refreshPickerGridInDockBadges() {
+  document.querySelectorAll("#pickerAppGrid .app-icon-btn").forEach((el) => {
+    const inDock = dockAppIds.includes(el.dataset.appId);
+    el.classList.toggle("in-dock", inDock);
+    const badge = el.querySelector(".in-dock-badge");
+    if (inDock && !badge) {
+      const span = document.createElement("span");
+      span.className = "in-dock-badge";
+      span.textContent = "已添加";
+      el.appendChild(span);
+    } else if (!inDock && badge) {
+      badge.remove();
+    }
+  });
+}
+
+function hideAllAppPanels() {
+  document.querySelectorAll(".app-panel").forEach((p) => p.classList.add("hidden"));
+}
+
+function showFlyout() {
+  document.getElementById("flyout").classList.remove("hidden");
+}
+
+function closeFlyout() {
+  cleanupActiveApp();
+  document.getElementById("flyout").classList.add("hidden");
+  activeAppId = null;
+  renderDock();
+}
+
+function openAppPanel(appId) {
+  const app = APPS.find((a) => a.id === appId);
+  if (!app) return;
+  cleanupActiveApp();
+  showFlyout();
+  activeAppId = appId;
+  document.getElementById("appPicker").classList.add("hidden");
+  hideAllAppPanels();
+  document.getElementById("flyoutTitle").textContent = `${app.icon} ${app.name}`;
+  document.getElementById(`panel-${appId}`).classList.remove("hidden");
+  renderDock();
+}
+
+function setPickerCategory(catId) {
+  document.querySelectorAll(".picker-cat-btn").forEach((b) => b.classList.toggle("active", b.dataset.cat === catId));
+  const grid = document.getElementById("pickerAppGrid");
+  grid.innerHTML = "";
+  const apps = APPS.filter((a) => a.category === catId);
+  if (!apps.length) {
+    grid.innerHTML = '<div class="picker-empty-hint">暂无应用，敬请期待</div>';
+    return;
+  }
+  for (const app of apps) {
+    const inDock = dockAppIds.includes(app.id);
+    const card = document.createElement("div");
+    card.className = "app-icon-btn" + (inDock ? " in-dock" : "");
+    card.draggable = true;
+    card.dataset.appId = app.id;
+    card.innerHTML =
+      `<div class="app-icon-square">${app.icon}</div><div class="app-icon-label">${app.name}</div>` +
+      (inDock ? '<span class="in-dock-badge">已添加</span>' : "");
+    card.addEventListener("click", () => {
+      addToDock(app.id);
+      openAppPanel(app.id);
+    });
+    card.addEventListener("dragstart", (e) => {
+      e.dataTransfer.setData("text/plain", app.id);
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    grid.appendChild(card);
+  }
+}
+
+function openPicker(catId = "data") {
+  cleanupActiveApp();
+  showFlyout();
+  activeAppId = null;
+  document.getElementById("flyoutTitle").textContent = "添加应用";
+  hideAllAppPanels();
+  document.getElementById("appPicker").classList.remove("hidden");
+  setPickerCategory(catId);
+  renderDock();
+}
+
+function initDockAndFlyout() {
+  dockAppIds = loadDockAppIds();
+  renderDock();
+
+  document.getElementById("addAppBtn").addEventListener("click", () => openPicker());
+  document.getElementById("flyoutCloseBtn").addEventListener("click", closeFlyout);
+  document.querySelectorAll(".picker-cat-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setPickerCategory(btn.dataset.cat));
+  });
+
+  const dock = document.getElementById("dock");
+  dock.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    dock.classList.add("drag-over");
+  });
+  dock.addEventListener("dragleave", (e) => {
+    if (!dock.contains(e.relatedTarget)) dock.classList.remove("drag-over");
+  });
+  dock.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dock.classList.remove("drag-over");
+    const appId = e.dataTransfer.getData("text/plain");
+    if (appId) addToDock(appId);
+  });
+
+  document.querySelectorAll("#panel-weibo .subtab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#panel-weibo .subtab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll("#panel-weibo .subtab-panel").forEach((p) =>
+        p.classList.toggle("hidden", p.id !== `subtab-${btn.dataset.subtab}`)
+      );
+    });
+  });
+}
+
 async function main() {
   initPeriodSelect();
+  initDockAndFlyout();
   await initDistrictList();
 
   const res = await fetch("/api/geojson");
@@ -966,25 +1201,8 @@ async function main() {
   document.getElementById("reset3DViewBtn").addEventListener("click", () => {
     if (maplibreMap) maplibreMap.easeTo({ ...MAP3D_DEFAULT_VIEW, duration: 600 });
   });
-  // 面板折叠后，里面还开着的地图图层类开关（3D柱状图、全部POI聚合展示）要跟着
-  // 自动关掉——不然面板收起来了，地图上的东西还留着，用户也没法在侧边栏看到
-  // 状态、没法关。复用checkbox已有的change监听逻辑（模拟一次用户手动取消勾选），
-  // 不用另外写一份清理逻辑。
-  function autoOffOnCollapse(detailsId, checkboxIds) {
-    const details = document.getElementById(detailsId);
-    details.addEventListener("toggle", () => {
-      if (details.open) return;
-      for (const id of checkboxIds) {
-        const cb = document.getElementById(id);
-        if (cb.checked) {
-          cb.checked = false;
-          cb.dispatchEvent(new Event("change"));
-        }
-      }
-    });
-  }
-  autoOffOnCollapse("vitalityPanel", ["vitality3DToggle", "studyAreaBoundaryToggle"]);
-  autoOffOnCollapse("allPoiPanel", ["allPoiToggle", "weibo3DToggle"]);
+  // 面板切走/关闭时自动关掉里面开着的地图图层类开关（3D柱状图、全部POI聚合
+  // 展示），见上面的APP_CLEANUP，在openAppPanel/closeFlyout切换时触发。
 
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
