@@ -46,6 +46,7 @@ def _check_rate_limit(ip: str):
 
 BASE_DIR = os.path.dirname(__file__)
 GEOJSON_PATH = os.path.join(BASE_DIR, "data", "grid_data.geojson")
+STUDY_AREA_BOUNDARY_PATH = os.path.join(BASE_DIR, "data", "study_area_boundary.geojson")
 WEIBO_JSON_PATH = os.path.join(BASE_DIR, "data", "weibo_posts.json")
 WEIBO_EMBEDDINGS_PATH = os.path.join(BASE_DIR, "data", "weibo_embeddings.npy")
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "frontend")
@@ -174,6 +175,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 with open(GEOJSON_PATH, encoding="utf-8") as f:
     _GEOJSON = json.load(f)
 
+with open(STUDY_AREA_BOUNDARY_PATH, encoding="utf-8") as f:
+    _STUDY_AREA_BOUNDARY = json.load(f)
+
 _ROWS = []
 for feat in _GEOJSON["features"]:
     row = dict(feat["properties"])
@@ -209,6 +213,13 @@ class ChatRequest(BaseModel):
 @app.get("/api/geojson")
 def get_geojson():
     return JSONResponse(content=_GEOJSON)
+
+
+@app.get("/api/study_area_boundary")
+def get_study_area_boundary():
+    """三环内研究区域的整体边界线（单个多边形轮廓，不是逐格网边框），
+    数据来自原始数据/shp文件/武汉三环面.shp转出的GeoJSON。"""
+    return JSONResponse(content=_STUDY_AREA_BOUNDARY)
 
 
 @app.get("/api/districts")

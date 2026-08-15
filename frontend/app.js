@@ -21,6 +21,8 @@ const NORMAL_BORDER_WEIGHT = 0.5;
 let geojsonData = null;
 let markerByGridId = new Map();
 let markerLayer = null;
+let studyAreaBoundaryData = null; // 三环整体轮廓GeoJSON，首次开启时拉取一次并缓存
+let studyAreaBoundaryLayer = null;
 let weiboMarkerLayer = null;
 let lastWeiboData = null; // {total_relevant, returned, posts}——切换排序时对这份数据纯前端重排，不重新请求后端
 let allPoiData = null; // {count, posts}——全部微博POI轻量数据，只在首次开启开关时拉取一次并缓存
@@ -402,6 +404,27 @@ function toggleFill(hidden) {
 function toggleBorder(hidden) {
   borderHidden = hidden;
   markerByGridId.forEach((m) => m.setStyle({ color: m.options.fillColor, ...currentStyle() }));
+}
+
+// 只画研究区域的整体轮廓（单个多边形描边），不是1万+个格网各自的边框——两种
+// 是完全不同的图层，开启时把逐格网图层整个从地图上摘掉，避免叠在一起分不清。
+async function toggleStudyAreaBoundary(show) {
+  if (show) {
+    if (markerLayer) map.removeLayer(markerLayer);
+    if (!studyAreaBoundaryLayer) {
+      if (!studyAreaBoundaryData) {
+        const res = await fetch("/api/study_area_boundary");
+        studyAreaBoundaryData = await res.json();
+      }
+      studyAreaBoundaryLayer = L.geoJSON(studyAreaBoundaryData, {
+        style: { color: "#ffffff", weight: 2, fillOpacity: 0 },
+      });
+    }
+    studyAreaBoundaryLayer.addTo(map);
+  } else {
+    if (studyAreaBoundaryLayer) map.removeLayer(studyAreaBoundaryLayer);
+    if (markerLayer) markerLayer.addTo(map);
+  }
 }
 
 function highlightGridIds(gridIds, flyToFirst = true) {
@@ -934,6 +957,9 @@ async function main() {
     }
     updateMap3DVisibility();
   });
+  document.getElementById("studyAreaBoundaryToggle").addEventListener("change", (e) => {
+    toggleStudyAreaBoundary(e.target.checked);
+  });
   document.getElementById("weibo3DToggle").addEventListener("change", async (e) => {
     weibo3DOn = e.target.checked;
     if (weibo3DOn && vitality3DOn) {
@@ -965,7 +991,7 @@ async function main() {
       }
     });
   }
-  autoOffOnCollapse("vitalityPanel", ["vitality3DToggle"]);
+  autoOffOnCollapse("vitalityPanel", ["vitality3DToggle", "studyAreaBoundaryToggle"]);
   autoOffOnCollapse("allPoiPanel", ["allPoiToggle", "weibo3DToggle"]);
 
   document.getElementById("chatSendBtn").addEventListener("click", sendChat);
