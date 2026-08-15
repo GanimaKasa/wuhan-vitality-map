@@ -356,6 +356,32 @@ input[type="date"] { color-scheme: dark; }
 .chat-input-row { display: flex; gap: 6px; }
 .chat-input-row input { flex: 1; }
 
+.chat-toolbar { display: flex; gap: 6px; flex-shrink: 0; }
+.chat-toolbar-btn { flex: 1; font-size: 11px; padding: 6px 8px; }
+
+.chat-memory-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+.chat-memory-settings input[type="number"] { width: 90px; }
+
+/* ask_user反问带选项时，渲染成一排可点击按钮，点了就相当于替用户打字回复了这句话。 */
+.ask-user-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: transparent;
+  padding: 0;
+  align-self: flex-start;
+}
+.ask-user-options button { background: #2c3444; }
+
 #mapContainer { flex: 1; height: 100%; }
 #map3dContainer { flex: 1; height: 100%; position: relative; background: #0b0e13; }
 
@@ -479,4 +505,5 @@ input[type="date"] { color-scheme: dark; }
   .weibo-item { background: #ffffff; }
   input[type="date"] { color-scheme: light; background: #ffffff; color: #1b1f27; }
   .agent-step { background: #ffffff; }
+  .ask-user-options button { background: #eef1f6; }
 }

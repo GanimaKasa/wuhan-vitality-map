@@ -728,13 +728,95 @@ function appendMessage(role, text) {
   box.scrollTop = box.scrollHeight;
 }
 
+// ==============================================================
+// 多轮对话记忆：只在浏览器本地保存（localStorage+内存），后端始终无状态——
+// 每次请求把最近几轮的压缩历史（只有问题文本+最终答案文本，不含中间工具调用
+// 细节）一起发给后端，而不是让服务器记着谁问过什么。这样design是因为部署的
+// Render免费档闲置会自动重启、内存状态说丢就丢，状态放前端反而更可靠。
+//
+// chatPendingState不做持久化（不存localStorage）：它是"当前这一轮被ask_user
+// 打断、还没问完"的原始快照，只在标签页存活期间有意义——刷新页面后聊天气泡
+// 本来就不会恢复，留着一个用户看不见的"待处理状态"只会让下一句话诡异地接上
+// 一个已经不存在于界面上的半截对话，所以刷新即视为放弃这次未完成的反问。
+// ==============================================================
+const CHAT_HISTORY_KEY = "vitalityMapChatHistory_v1";
+const CHAT_MAX_TURNS_KEY = "vitalityMapChatMaxTurns_v1";
+const DEFAULT_MAX_CHAT_TURNS = 10;
+
+let chatHistory = loadChatHistory();       // [{question, answer}, ...]，已压缩的完整轮次
+let chatMaxTurns = loadChatMaxTurns();     // 最多保留几轮
+let chatPendingState = null;               // null | {pendingTurn, originalQuestion}——当前轮若卡在ask_user反问，存这里
+
+function loadChatHistory() {
+  try {
+    const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // localStorage不可用或数据损坏，退回空历史
+  }
+  return [];
+}
+
+function saveChatHistory() {
+  try {
+    localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(chatHistory));
+  } catch {
+    // 忽略——存储失败不影响当前会话使用
+  }
+}
+
+function loadChatMaxTurns() {
+  const raw = localStorage.getItem(CHAT_MAX_TURNS_KEY);
+  const n = raw !== null ? parseInt(raw, 10) : DEFAULT_MAX_CHAT_TURNS;
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MAX_CHAT_TURNS;
+}
+
+function saveChatMaxTurns() {
+  try {
+    localStorage.setItem(CHAT_MAX_TURNS_KEY, String(chatMaxTurns));
+  } catch {
+    // 忽略
+  }
+}
+
+function trimChatHistory() {
+  if (chatHistory.length > chatMaxTurns) {
+    chatHistory = chatHistory.slice(chatHistory.length - chatMaxTurns);
+  }
+}
+
+function renderChatHistoryOrWelcome() {
+  if (chatHistory.length) {
+    for (const turn of chatHistory) {
+      appendMessage("user", turn.question);
+      appendMessage("bot", turn.answer);
+    }
+  } else {
+    appendMessage("bot", "你好，我是活力地图问答助手，已接入DeepSeek。可以问我“武昌区晚上活力怎么样”这类问题，也可以问“这个周末去哪玩”这类需要规划路线的开放性问题，也可以在上面的微博搜索框里搜关键词看真实网友动态。");
+  }
+}
+
+function startNewConversation() {
+  chatHistory = [];
+  chatPendingState = null;
+  saveChatHistory();
+  document.getElementById("chatMessages").innerHTML = "";
+  if (agentRouteLayer) {
+    map.removeLayer(agentRouteLayer);
+    agentRouteLayer = null;
+  }
+  highlightGridIds([]); // 顺带清掉地图上残留的格网高亮，跟新对话保持一致
+  renderChatHistoryOrWelcome();
+}
+
 // 问答框合并前，"快问快答"(/api/chat)和"智能推荐"(/api/chat/agent)是两个独立
 // 输入框，用户分不清该用哪个。现在统一成一个/api/chat端点+一个输入框，后端按
 // 问题内容判断走哪条内部路径，前端不关心走的是哪条——都当同一套SSE事件流处理：
 // 简单问题只收到一个"final"事件（跟原来agent路径的最终事件同格式），复杂问题
 // 会先收到若干"tool_call"/"tool_result"中间步骤事件，渲染成聊天流里的一条
-// 步骤气泡，再收到"final"事件。
-function handleChatEvent(event, stepsBox) {
+// 步骤气泡；中途可能收到一个"ask_user"事件——模型主动停下来问一句，等用户
+// 回答才会继续；最后收到"final"事件。
+function handleChatEvent(event, stepsBox, turnQuestion) {
   const box = document.getElementById("chatMessages");
   if (event.type === "tool_call") {
     stepsBox.classList.remove("hidden");
@@ -751,16 +833,48 @@ function handleChatEvent(event, stepsBox) {
       item.textContent = `✅ ${event.label}完成`;
       item.classList.add("done");
     }
+  } else if (event.type === "ask_user") {
+    if (stepsBox.classList.contains("hidden")) stepsBox.remove();
+    // 记下这次暂停的原始快照——不做任何加工，下次用户发消息时原样带回去，
+    // 让后端从暂停的地方接着跑（借鉴LangGraph interrupt/resume的思路）。
+    chatPendingState = { pendingTurn: event.pending_turn, originalQuestion: turnQuestion };
+    appendMessage("bot", event.question);
+    if (event.options && event.options.length) {
+      const optionsRow = document.createElement("div");
+      optionsRow.className = "msg bot ask-user-options";
+      for (const opt of event.options) {
+        const btn = document.createElement("button");
+        btn.textContent = opt;
+        btn.addEventListener("click", () => {
+          optionsRow.remove();
+          document.getElementById("chatInput").value = opt;
+          sendChat();
+        });
+        optionsRow.appendChild(btn);
+      }
+      box.appendChild(optionsRow);
+      box.scrollTop = box.scrollHeight;
+    }
+    // 没有options时不用额外处理——用户会在下面的输入框正常打字，sendChat会
+    // 检测到chatPendingState存在，自动走"恢复"路径，不用用户/我们做什么特殊操作。
   } else if (event.type === "final") {
     if (stepsBox.classList.contains("hidden")) stepsBox.remove();
     appendMessage("bot", event.answer);
+
+    // 这一轮正常结束了：清掉暂停状态，把"这轮最初问的问题+最终答案"压缩记进
+    // 历史（不含中间可能发生过的ask_user反问细节），供下一轮当记忆用。
+    chatPendingState = null;
+    chatHistory.push({ question: turnQuestion, answer: event.answer });
+    trimChatHistory();
+    saveChatHistory();
+
     const gridIds = event.highlight_grid_ids || [];
     const hasGrids = gridIds.length > 0;
     const hasRoute = (event.markers && event.markers.length) || (event.polylines && event.polylines.length);
 
-    // 格网高亮和路线/地点标记是否同时出现，由后端agent每次调get_vitality时
-    // 自己传的show_on_map决定（见backend/agent_client.py的工具说明），不是
-    // 前端靠"有没有路线"猜的开关——所以这里两种信号该显示哪个/要不要同时显示，
+    // 格网高亮和路线/地点标记是否同时出现，由后端agent调用finish时模型自己
+    // 挑的highlight_grid_ids决定（见backend/agent_client.py的工具说明），不是
+    // 前端靠"有没有路线"猜的开关——这里两种信号该显示哪个/要不要同时显示，
     // 完全看事件里实际带了什么，前端只管一起画出来、算一个能同时框住两者的
     // 视野，不用再自己判断"这次是不是该显示格网"。
     if (hasGrids) highlightGridIds(gridIds, !hasRoute);
@@ -773,9 +887,9 @@ function handleChatEvent(event, stepsBox) {
 
 async function sendChat() {
   const input = document.getElementById("chatInput");
-  const question = input.value.trim();
-  if (!question) return;
-  appendMessage("user", question);
+  const text = input.value.trim();
+  if (!text) return;
+  appendMessage("user", text);
   input.value = "";
 
   const box = document.getElementById("chatMessages");
@@ -793,11 +907,20 @@ async function sendChat() {
   stepsBox.className = "msg bot agent-steps-msg hidden";
   box.appendChild(stepsBox);
 
+  // 有pendingState说明这句话是在回答上一轮的ask_user反问，走"恢复"路径：
+  // 原样把快照传回去，turnQuestion沿用这一整轮最初的那句问题（不是这句回复），
+  // 这样最终存进历史的是"完整一轮的原始问题+最终答案"，不是反问的中间过程。
+  const isResuming = !!chatPendingState;
+  const requestBody = isResuming
+    ? { pending_turn: chatPendingState.pendingTurn, reply: text }
+    : { question: text, history: chatHistory };
+  const turnQuestion = isResuming ? chatPendingState.originalQuestion : text;
+
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(requestBody),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -817,7 +940,7 @@ async function sendChat() {
       buffer = parts.pop(); // 最后一段可能不完整（还没收全一个事件），留到下次拼接
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
-        handleChatEvent(JSON.parse(part.slice(6)), stepsBox);
+        handleChatEvent(JSON.parse(part.slice(6)), stepsBox, turnQuestion);
       }
     }
   } catch {
@@ -1211,8 +1334,29 @@ async function main() {
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") sendChat();
   });
+  document.getElementById("chatNewConversationBtn").addEventListener("click", startNewConversation);
+  document.getElementById("chatMemorySettingsBtn").addEventListener("click", () => {
+    const panel = document.getElementById("chatMemorySettingsPanel");
+    panel.classList.toggle("hidden");
+    if (!panel.classList.contains("hidden")) {
+      document.getElementById("chatMaxTurnsInput").value = chatMaxTurns;
+    }
+  });
+  document.getElementById("chatMemorySettingsCloseBtn").addEventListener("click", () => {
+    document.getElementById("chatMemorySettingsPanel").classList.add("hidden");
+  });
+  document.getElementById("chatMaxTurnsInput").addEventListener("change", (e) => {
+    let n = parseInt(e.target.value, 10);
+    if (!Number.isFinite(n) || n < 0) n = DEFAULT_MAX_CHAT_TURNS;
+    if (n > 50) n = 50;
+    e.target.value = n;
+    chatMaxTurns = n;
+    saveChatMaxTurns();
+    trimChatHistory();
+    saveChatHistory();
+  });
 
-  appendMessage("bot", "你好，我是活力地图问答助手，已接入DeepSeek。可以问我“武昌区晚上活力怎么样”这类问题，也可以问“这个周末去哪玩”这类需要规划路线的开放性问题，也可以在上面的微博搜索框里搜关键词看真实网友动态。");
+  renderChatHistoryOrWelcome();
 }
 
 main();

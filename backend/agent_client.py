@@ -72,6 +72,14 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智�
   （mode可选driving驾车/walking步行/transit公交地铁），按plan_route_order排好的顺序，
   对相邻两点逐段调用这个工具拿真实路线，不要跳过这一步直接用直线距离当成真实路程告诉用户
 
+中途反问：
+- 拿不准该怎么理解用户的意图、或者觉得某个决策最好让用户自己选时，调用ask_user(question,
+  options)主动停下来问一句，不要自己瞎猜——比如用户说"推荐几个打卡点"但没说想要几个/什么
+  类型，或者你觉得"要不要把活力数据画在地图上"这种事应该让用户自己决定。有明确的几个选项
+  可选时，把它们列进options，用户会看到按钮直接点选；没有固定选项、需要用户自己打字回答
+  的开放式问题（比如具体地名、数字），options留空。调用后对话会暂停等用户回答，所以只在
+  真的没有用户输入就没法继续时才问，能自己合理判断的不要问，不要为了显得严谨而每次都问。
+
 结束对话：
 - 你必须调用finish(answer, highlight_grid_ids)工具来结束对话、给出最终回答，不要不调用
   任何工具、直接用一段文字结束——那样地图不会有任何反馈。
@@ -83,7 +91,17 @@ AGENT_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站的智�
   是这轮推荐依据的那些格网，列进highlight_grid_ids；如果这轮回答不需要强调任何格网（比如
   纯路线规划、或者查过的活力/热点数据只是背景参考，没有直接构成你的推荐结论），传空数组，
   不要为了"有内容"而把无关的格网也塞进去。geocode/route_between查到的地点和路线不用你
-  操心，会自动显示在地图上。
+  操心，会自动显示在地图上。只能列你自己真的查询到过的格网编号，不要凭印象编造。
+
+对话记忆：
+- 如果这次对话历史里已经包含之前几轮的问答（更早的user/assistant消息），直接当成已知
+  上下文使用，不用重新自我介绍、也不用把用户之前已经问过的信息再问一遍。
+- 用户明确在追问"你刚才说的""上面提到的"这类指向之前某句话的问题时，答案就在历史里
+  之前那条assistant消息的文字里，直接读出来回答，不要重新调用工具去查一个新结果——
+  哪怕新查出来的结果看起来更"完整"或者你不确定历史里那个数字是不是最新的，也不要在
+  用户只是想确认"你之前说的是什么"时用一个新查询的结果替换掉，那样会前后对不上、
+  显得前言不搭后语。只有日期/天气这类明确会过期、且用户问的是"现在/最新"而不是"你刚才
+  说的"时，才需要重新查一次。
 
 要求：
 - 先想清楚需要哪些信息再决定调用顺序，不要瞎调用不相关的工具
@@ -243,6 +261,33 @@ AGENT_TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "ask_user",
+            "description": (
+                "遇到拿不准该怎么理解用户意图、或者某个决策最好让用户自己选的情况，主动停下来"
+                "问用户一句，而不是自己瞎猜。调用后对话会暂停，等用户回答才继续，所以只在真的"
+                "需要用户输入才能继续时才用，能自己合理判断的不要问。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "要问用户的问题，口语化、简短"},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "有明确的几个选项可选时列在这里，用户会看到按钮直接点选；开放式"
+                            "问题（比如问具体地名、数字，没法枚举）不传这个字段，用户会自己"
+                            "打字回答。"
+                        ),
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "finish",
             "description": (
                 "结束对话并给出最终回答。收集完所有需要的信息、想清楚要怎么回答用户后，"
@@ -303,39 +348,84 @@ def _call_deepseek(messages: list[dict]) -> dict:
     return resp.json()["choices"][0]["message"]
 
 
-def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
+def _build_fresh_messages(question: str, history: list[dict] | None) -> list[dict]:
     """
-    question: 用户原始问题
+    history: [{"question": str, "answer": str}, ...]，前端传来的、已经压缩过的历史轮次
+    （只有问题文本+最终答案文本，不含中间工具调用细节——那部分细节太大，且每轮之间
+    互不相关，没必要原样带过来）。拼成普通的user/assistant消息对，接到系统提示词后面，
+    让模型"记得"之前聊过什么，但不需要重放当时具体调用了哪些工具。
+    """
+    today = _today_str()
+    messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(today=today)}]
+    for turn in (history or []):
+        q, a = turn.get("question"), turn.get("answer")
+        if q and a:
+            messages.append({"role": "user", "content": q})
+            messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+def run_agent_stream(
+    tool_impls: dict,
+    extract_map_features,
+    question: str | None = None,
+    history: list[dict] | None = None,
+    pending_turn: dict | None = None,
+    reply: str | None = None,
+):
+    """
+    两种起步方式，二选一：
+    - question(+history)：全新一轮（或者上一轮已经正常结束、这轮是紧接着问的新问题）。
+      history是之前完成过的轮次的压缩记录，见_build_fresh_messages。
+    - pending_turn(+reply)：上一轮被ask_user打断、这次是恢复。pending_turn是上次
+      "ask_user"事件里原样吐给前端、又原样传回来的{"messages": [...], "tool_call_id": str}——
+      不做任何重建/猜测，只是把reply包装成对应那次工具调用的回应，接上继续跑同一个循环。
+      这是借鉴LangGraph interrupt/resume模式的核心思路：暂停时存精确快照，恢复时原样
+      接回去，而不是事后猜测该怎么拼消息。
+
     tool_impls: {工具名: 可调用对象}，由app.py传入，实际执行逻辑在app.py里
-    extract_map_features: (tool_name, result_dict) -> {"markers":[...], "polylines":[...]}，
-        从工具结果里挑出能在地图上画的东西，由app.py传入（因为哪个字段对应什么地图元素
-        跟数据结构强相关）。不再产出grid_ids——格网高亮不是数据查询工具的自动副作用，
-        而是模型调用finish时显式挑选的，见下面的说明。
+    extract_map_features: (tool_name, result_dict) -> {"markers":[...], "polylines":[...],
+        "seen_grid_ids":[...]}，由app.py传入。markers/polylines在工具执行时直接累加进
+        最终结果；seen_grid_ids只是记录"模型这一路真的查到过哪些格网编号"，用来在finish
+        阶段做白名单校验，本身不产生任何地图效果。
 
     生成一系列事件dict：
     - {"type": "tool_call", "tool": name, "label": ...}
     - {"type": "tool_result", "tool": name, "label": ...}
+    - {"type": "ask_user", "question": str, "options": [...] | None, "pending_turn": {...}}
     - {"type": "final", "answer": str, "highlight_grid_ids": [...], "markers": [...], "polylines": [...]}
 
     highlight_grid_ids只来自模型显式调用finish(answer, highlight_grid_ids)时传的参数，
-    不再从get_vitality/search_weibo_hotspots的查询结果里自动收集。踩过的坑：早期版本
-    是"只要调用了这两个工具，返回里的格网就无条件全部高亮"，后来改成让模型在每次调用时
-    传一个show_on_map开关——但这仍然把"要不要展示"这个决策捆在"查询数据的那一刻"，
-    模型经常在还没想清楚最终答案前就要预判，容易判断失误（生产环境复现过：agent反复调
-    search_weibo_hotspots"找灵感"，每次格网都被展示，跟最终推荐的具体地点毫无关系）。
-    现在彻底解耦：get_vitality/search_weibo_hotspots只是单纯的数据查询工具，调用它们
-    不会自动产生任何地图效果；等模型想清楚整个答案、调用finish结束对话时，才从它这一路
-    看到的候选格网里主动挑选真正要展示的那些。markers/polylines不需要这套机制——
-    geocode/route_between的返回结果本身就是"一个具体地点/一段具体路线"，调用即代表
-    要展示，没有"顺手查个背景信息"这种歧义，继续在工具执行时自动收集。
+    不再从get_vitality/search_weibo_hotspots的查询结果里自动收集（踩过的坑：早期版本
+    "只要调用了这两个工具就无条件高亮"、后来的show_on_map开关都还是把"要不要展示"这个
+    决策捆在"查询数据的那一刻"，模型经常判断失误）。现在彻底解耦：这两个工具只是单纯的
+    数据查询，不产生任何地图效果；等模型调用finish收尾时，才从它这一路查到的候选格网里
+    主动挑选。同时做了白名单校验（对照seen_grid_ids）——模型只能选它真的查询到过的编号，
+    没查过的一律丢弃，防止编造/记错格网编号却被原样显示到地图上。
     """
-    today = _today_str()
-    messages = [
-        {"role": "system", "content": AGENT_SYSTEM_PROMPT_TEMPLATE.format(today=today)},
-        {"role": "user", "content": question},
-    ]
+    if pending_turn:
+        # 原样接回，不重建：messages是上次暂停那一刻的精确快照，reply包装成对那次
+        # ask_user调用的工具回应，直接续上。
+        messages = list(pending_turn.get("messages") or [])
+        tool_call_id = pending_turn.get("tool_call_id")
+        if not messages or not tool_call_id:
+            yield {
+                "type": "final", "answer": "抱歉，这次对话的状态丢失了，麻烦重新问一遍。",
+                "highlight_grid_ids": [], "markers": [], "polylines": [],
+            }
+            return
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": json.dumps({"answer": reply or ""}, ensure_ascii=False),
+        })
+    else:
+        messages = _build_fresh_messages(question or "", history)
+
     markers: list[dict] = []
     polylines: list[list] = []
+    seen_grid_ids: set[int] = set()
 
     def _final(answer: str, highlight_grid_ids=None) -> dict:
         return {
@@ -372,8 +462,23 @@ def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
             if name == "finish":
                 answer = args.get("answer") or "抱歉，我没能给出有效回答，换个问法再试试？"
                 raw_grid_ids = args.get("highlight_grid_ids") or []
-                grid_ids = [g for g in raw_grid_ids if isinstance(g, int)]
+                grid_ids = [g for g in raw_grid_ids if isinstance(g, int) and g in seen_grid_ids]
                 yield _final(answer, grid_ids)
+                return
+
+            if name == "ask_user":
+                question_text = args.get("question") or "能再说得具体一点吗？"
+                options = args.get("options")
+                if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+                    options = None
+                # messages此刻已经包含了这条带ask_user调用的助手消息（上面messages.append(msg)
+                # 那一步），直接原样打包当快照——不需要再额外处理，见函数开头pending_turn的说明。
+                yield {
+                    "type": "ask_user",
+                    "question": question_text,
+                    "options": options,
+                    "pending_turn": {"messages": messages, "tool_call_id": call["id"]},
+                }
                 return
 
             label = TOOL_DISPLAY_NAMES.get(name, name)
@@ -392,6 +497,7 @@ def run_agent_stream(question: str, tool_impls: dict, extract_map_features):
                 features = extract_map_features(name, result) or {}
                 markers.extend(features.get("markers", []))
                 polylines.extend(features.get("polylines", []))
+                seen_grid_ids.update(features.get("seen_grid_ids", []))
             except Exception:
                 pass
 

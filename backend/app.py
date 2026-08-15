@@ -207,7 +207,15 @@ ALL_POI_LIGHT = WEIBO_DF[ALL_POI_LIGHT_COLS].to_dict(orient="records")
 
 
 class ChatRequest(BaseModel):
-    question: str
+    # question+history：全新一轮（或者上一轮已正常结束、紧接着问的新问题）。
+    # history是前端本地压缩存好的最近几轮{question,answer}，不传等价于没有记忆。
+    # pending_turn+reply：上一轮被ask_user打断、这次是恢复——pending_turn是上次
+    # "ask_user"事件里原样发给前端、又原样传回来的快照，不做任何加工，直接透传给
+    # agent_client.run_agent_stream。两种方式二选一，都不传时question按空字符串处理。
+    question: str | None = None
+    history: list[dict] | None = None
+    pending_turn: dict | None = None
+    reply: str | None = None
 
 
 @app.get("/api/geojson")
@@ -367,11 +375,20 @@ def _resolve_periods_and_rows(intent: dict):
 # 让用户能看到中间步骤，不会像纯等待一样没有反馈）。
 AGENT_TRIGGER_KEYWORDS = ["推荐", "路线", "规划", "去哪", "怎么玩", "一日游", "行程", "打卡", "周末"]
 
+# 快速路径是纯关键词解析+单次数据库查询，完全不知道"历史对话"这回事——如果问题里
+# 恰好也命中了period/district/direction关键词（哪怕本意是追问上一轮，比如"你刚才说的
+# 活力最高那个格网"里的"活力""高"会命中direction关键词），会被判定has_signal=True走
+# 快速路径，安安静静地重新查一次全新数据，跟上一轮答案对不上却不会报错——这是真实
+# 复现过的bug，不是假设：只要问题里带这类"指代之前对话"的词、且这次请求确实带了历史，
+# 就强制走agent路径（有历史记忆能力），不看关键词解析结果如何。
+MEMORY_REFERENCE_KEYWORDS = ["刚才", "刚刚", "刚说", "上面", "上一条", "上次", "之前", "你说", "提到的"]
 
-def _should_use_agent(question: str, intent: dict) -> bool:
+
+def _should_use_agent(question: str, intent: dict, has_history: bool = False) -> bool:
     has_signal = bool(intent["periods"] or intent["district"] or intent["direction"])
     has_open_ended_kw = any(kw in question for kw in AGENT_TRIGGER_KEYWORDS)
-    return has_open_ended_kw or not has_signal
+    references_memory = has_history and any(kw in question for kw in MEMORY_REFERENCE_KEYWORDS)
+    return has_open_ended_kw or not has_signal or references_memory
 
 
 @app.post("/api/chat")
@@ -379,17 +396,34 @@ def chat(req: ChatRequest, request: Request):
     """
     统一问答入口，SSE流式返回。快速路径只发一个"final"事件（跟agent路径的最终
     事件同格式），前端不用区分走的是哪条路径，都当成同一套事件流处理；agent路径
-    会先发若干"tool_call"/"tool_result"事件展示中间步骤，再发"final"事件。
+    会先发若干"tool_call"/"tool_result"事件展示中间步骤，中途可能发一个"ask_user"
+    事件暂停等用户回答，最终发"final"事件。
+
+    pending_turn有值时，说明这是在恢复一次被ask_user打断的对话——直接进agent循环
+    续接，不再走parse_intent那套快速路径判断（快速路径设计上就是处理独立的、封闭式
+    的单轮问题，跟"接着上次没问完的话题继续"这件事没关系）。
     """
     client_ip = request.client.host if request.client else "unknown"
     _check_rate_limit(client_ip)
 
-    intent = retrieval.parse_intent(req.question, KNOWN_DISTRICTS)
-    use_agent = _should_use_agent(req.question, intent)
-
     def event_stream():
+        if req.pending_turn:
+            for event in agent_client.run_agent_stream(
+                AGENT_TOOL_IMPLS, _extract_map_features,
+                pending_turn=req.pending_turn, reply=req.reply,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            return
+
+        question = req.question or ""
+        intent = retrieval.parse_intent(question, KNOWN_DISTRICTS)
+        use_agent = _should_use_agent(question, intent, bool(req.history))
+
         if use_agent:
-            for event in agent_client.run_agent_stream(req.question, AGENT_TOOL_IMPLS, _extract_map_features):
+            for event in agent_client.run_agent_stream(
+                AGENT_TOOL_IMPLS, _extract_map_features,
+                question=question, history=req.history,
+            ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
 
@@ -397,10 +431,10 @@ def chat(req: ChatRequest, request: Request):
         if has_signal:
             rows = _resolve_periods_and_rows(intent)
             context = {"intent": intent, "rows": rows}
-            answer = llm_client.answer_question(req.question, context)
+            answer = llm_client.answer_question(question, context)
             highlight_grid_ids = [r["grid_id"] for r in rows]
         else:
-            answer = llm_client.answer_question(req.question, {"fallback": True})
+            answer = llm_client.answer_question(question, {"fallback": True})
             highlight_grid_ids = []
         event = {"type": "final", "answer": answer, "highlight_grid_ids": highlight_grid_ids}
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -763,19 +797,22 @@ def _extract_map_features(tool_name: str, result: dict) -> dict:
     - markers：geocode查到的地点，前端画点用
     - polylines：route_between查到的真实道路坐标串（存在"_polyline"字段里，
       不会被喂给模型，只在这里、只给地图用）
-
-    不产出grid_ids——格网高亮不是get_vitality/search_weibo_hotspots这类数据查询工具
-    调用后的自动副作用，而是模型显式调用finish(answer, highlight_grid_ids)时主动挑选
-    的，见agent_client.run_agent_stream里的说明。之前尝试过在这两个工具上加
-    show_on_map开关、让模型每次调用时预判"这次结果算不算数"，但那仍然把"要不要在地图
-    上展示"这个决策捆在"查询数据的那一刻"，模型经常判断失误——已经改成在finish阶段
-    统一决定，这里就不需要（也不应该）再从get_vitality/search_weibo_hotspots的结果
-    里提取grid_ids了。
+    - seen_grid_ids：get_vitality/search_weibo_hotspots这次结果里出现过的格网编号。
+      **不会自动展示在地图上**——格网高亮只来自模型显式调用finish(answer,
+      highlight_grid_ids)时主动挑选的，见agent_client.run_agent_stream里的说明。
+      seen_grid_ids只是agent_client用来做白名单校验的事实依据：模型在finish里选的
+      highlight_grid_ids必须是这一路真实查询到过的格网子集，防止编造/记错一个从没
+      查到过的编号却被原样显示到地图上。这是确定性的事实核查（"是不是真查到过"），
+      不影响"该不该展示"这个模型自己的判断。
     """
     if tool_name == "geocode" and "lng" in result and "lat" in result:
         return {"markers": [{"name": result.get("name"), "lng": result["lng"], "lat": result["lat"]}]}
     if tool_name == "route_between" and result.get("_polyline"):
         return {"polylines": [result["_polyline"]]}
+    if tool_name == "get_vitality":
+        return {"seen_grid_ids": [r["grid_id"] for r in result.get("results", [])]}
+    if tool_name == "search_weibo_hotspots":
+        return {"seen_grid_ids": [p["grid_id"] for p in result.get("posts", [])]}
     return {}
 
 

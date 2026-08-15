@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.css" />
-<link rel="stylesheet" href="style.css?v=13" />
+<link rel="stylesheet" href="style.css?v=14" />
 </head>
 <body>
 <div id="app">
@@ -137,6 +137,19 @@
 
         <div id="panel-chat" class="app-panel hidden">
           <div class="chat-panel-inner">
+            <div class="chat-toolbar">
+              <button id="chatNewConversationBtn" class="chat-toolbar-btn" title="清空对话记忆，重新开始">🆕 新建对话</button>
+              <button id="chatMemorySettingsBtn" class="chat-toolbar-btn" title="设置记忆轮数">⚙️ 记忆设置</button>
+            </div>
+            <div id="chatMemorySettingsPanel" class="chat-memory-settings hidden">
+              <label for="chatMaxTurnsInput">最多记住最近几轮问答</label>
+              <input id="chatMaxTurnsInput" type="number" min="0" max="50" value="10" />
+              <div class="hint">
+                为了控制每次问答的成本（记的越多，每次都要把历史一起发给大模型，越贵也越慢），
+                默认只记住最近10轮，可自行调整；设为0表示不记忆，每次都是独立的新对话。
+              </div>
+              <button id="chatMemorySettingsCloseBtn">完成</button>
+            </div>
             <div id="chatMessages"></div>
             <div class="chat-input-row">
               <input id="chatInput" type="text" placeholder="例如：武昌区晚上活力怎么样 / 这个周末去哪玩" />
@@ -160,6 +173,6 @@
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
-<script src="app.js?v=25"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>
