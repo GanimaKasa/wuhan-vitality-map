@@ -1,40 +1,28 @@
 # ==============================================================
-#  Function calling agent循环：反复调用DeepSeek + 工具，直到给出最终答案。
-#  只负责编排循环本身（ReAct风格：想→调用→观察→再想），工具的具体实现
-#  （怎么查天气、怎么查活力数据）在app.py里，通过tool_impls参数注入进来，
-#  避免这个模块跟app.py产生循环import——app.py依赖DF/WEIBO_DF这些大对象，
-#  agent_client不需要认识它们，只需要认识"工具名->可调用对象"这个映射。
+#  Function calling agent循环（"模式A"）：反复调用DeepSeek + 工具，直到给出
+#  最终答案。只负责编排循环本身（ReAct风格：想→调用→观察→再想），工具的
+#  具体实现在tools/包里，通过tool_impls参数注入进来，避免这个模块直接依赖
+#  DF/WEIBO_DF这些大对象，只需要认识"工具名->可调用对象"这个映射。
 #
 #  设计参考：Anthropic《Building Effective Agents》里的分类，这是最基础的
 #  autonomous agent循环（ReAct），不是写死步骤的workflow——因为案例场景
 #  （天气好不好决定推荐室内还是室外）本身就是"要根据中间结果动态调整"的，
 #  没法提前把所有分支都枚举写死。
+#
+#  这是手写的单体agent，刻意保留（没有用LangGraph重写）——它是"从第一性原理
+#  理解agent循环怎么运作"的证据：ask_user的暂停/恢复快照机制、多轮记忆的
+#  历史压缩、finish阶段的格网白名单校验，都是这个会话里真实调试、复现bug、
+#  修复过的逻辑。新的multi-agent（"模式B"，见agents/orchestrator/）改用
+#  LangGraph搭建，两者并存，对应前端的agent模式切换按钮。
 # ==============================================================
 
 import json
-import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
-
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
-
-# 硬上限，不依赖模型"自觉"停下来——防止意外的死循环调用，控制成本和延迟。
-# 5曾经不够用：路线规划这类任务有硬性顺序依赖（先geocode拿到坐标，才能排访问
-# 顺序，排完顺序才能逐段查真实路线），哪怕同一轮里能并行打包多个工具调用，
-# 光是"发现候选点→排序→逐段查路线"这条链路最少也要4~5轮，5变成了卡在半路
-# 触发"问题太复杂"兜底话术、实际上数据都快查完了的情况（线上实测复现过）。
-# 8曾经够用，改成finish工具收尾后又不够了：以前模型最后一轮直接输出文字回答，
-# 这一轮同时兼顾"给答案"和"结束对话"两件事；现在必须专门再调一次finish，多占
-# 一轮预算——8点打卡+路线这种本来就卡在临界值的复杂问题，实测因此又撞到上限
-# （数据全查完了，只差最后一次finish调用）。调到10留出这个新增的固定开销。
-MAX_AGENT_STEPS = 10
+from vitality_map.core.config import settings
 
 # Render服务器容器默认跑UTC时区，如果直接用date.today()（读服务器本地时间），
 # 北京时间0点~8点这段时间UTC日期还停在"前一天"，会让agent把"今天"算错一整天
@@ -342,13 +330,13 @@ TOOL_DISPLAY_NAMES = {
 
 
 def _call_deepseek(messages: list[dict]) -> dict:
-    if not DEEPSEEK_API_KEY:
+    if not settings.deepseek_api_key:
         raise RuntimeError("未配置DEEPSEEK_API_KEY环境变量")
     resp = requests.post(
-        DEEPSEEK_API_URL,
-        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+        settings.deepseek_api_url,
+        headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
         json={
-            "model": DEEPSEEK_MODEL,
+            "model": settings.deepseek_model,
             "messages": messages,
             "tools": AGENT_TOOLS_SCHEMA,
             "temperature": 0.3,
@@ -395,9 +383,9 @@ def run_agent_stream(
       这是借鉴LangGraph interrupt/resume模式的核心思路：暂停时存精确快照，恢复时原样
       接回去，而不是事后猜测该怎么拼消息。
 
-    tool_impls: {工具名: 可调用对象}，由app.py传入，实际执行逻辑在app.py里
+    tool_impls: {工具名: 可调用对象}，由api/chat.py传入，实际执行逻辑在tools/包里
     extract_map_features: (tool_name, result_dict) -> {"markers":[...], "polylines":[...],
-        "seen_grid_ids":[...]}，由app.py传入。markers/polylines在工具执行时直接累加进
+        "seen_grid_ids":[...]}，由api/chat.py传入。markers/polylines在工具执行时直接累加进
         最终结果；seen_grid_ids只是记录"模型这一路真的查到过哪些格网编号"，用来在finish
         阶段做白名单校验，本身不产生任何地图效果。
 
@@ -450,7 +438,7 @@ def run_agent_stream(
             "polylines": polylines,
         }
 
-    for _ in range(MAX_AGENT_STEPS):
+    for _ in range(settings.max_agent_steps):
         try:
             msg = _call_deepseek(messages)
         except Exception as e:

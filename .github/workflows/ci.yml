@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend package (editable, with dev deps)
+        run: pip install -e "./backend[dev]"
+
+      # 只跑不依赖外部API key（DeepSeek/SiliconFlow/和风天气/高德/Tavily）的
+      # 单元+集成测试。真实API调用这块目前还是靠手工验证，没有做成CI里能跑的
+      # 端到端测试（需要mock所有外部服务或者提供测试用key），属于后续要补的
+      # 评估体系范畴，不在这次目录重构里一起做。
+      - name: Run tests
+        run: cd backend && python -m pytest tests/ -v

@@ -1,22 +1,16 @@
 # ==============================================================
-#  LLM问答抽象层。
+#  LLM问答抽象层（快速路径用）。
 #  已接入DeepSeek API（OpenAI兼容格式）。若未配置DEEPSEEK_API_KEY，
 #  或调用失败，自动降级回退到纯模板拼接的mock回答，保证demo始终可用。
 #  接口签名固定：answer_question(question, context) -> str，
-#  app.py不用感知内部是mock还是真实API。
+#  调用方不用感知内部是mock还是真实API。
 # ==============================================================
 
 import json
-import os
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()  # 读取 backend/.env 里的 DEEPSEEK_API_KEY
-
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+from vitality_map.core.config import settings
 
 SYSTEM_PROMPT = (
     "你是“武汉城市活力地图”网站的问答助手。用户会问关于武汉三环内某片区域/某个时段的活力情况，"
@@ -37,10 +31,10 @@ def _build_user_message(question: str, context: dict) -> str:
 def _chat_completion(system_prompt: str, user_message: str, max_tokens: int = 300, temperature: float = 0.3) -> str:
     """通用DeepSeek调用，未配置key或请求失败时抛异常，由调用方决定降级方式"""
     resp = requests.post(
-        DEEPSEEK_API_URL,
-        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+        settings.deepseek_api_url,
+        headers={"Authorization": f"Bearer {settings.deepseek_api_key}"},
         json={
-            "model": DEEPSEEK_MODEL,
+            "model": settings.deepseek_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -94,7 +88,7 @@ def answer_question(question: str, context: dict) -> str:
         "fallback": bool,
     }
     """
-    if not DEEPSEEK_API_KEY:
+    if not settings.deepseek_api_key:
         return _mock_answer(question, context)
     try:
         return _deepseek_answer(question, context)
@@ -114,7 +108,7 @@ KEYWORD_EXPAND_SYSTEM_PROMPT = (
 def expand_keywords(keyword: str) -> list[str]:
     """把用户输入的关键词语义扩展成一组相关词，用于更宽泛地匹配微博文本。
     DeepSeek不可用或返回格式不对时，降级为只用原始关键词。"""
-    if not DEEPSEEK_API_KEY:
+    if not settings.deepseek_api_key:
         return [keyword]
     try:
         raw = _chat_completion(KEYWORD_EXPAND_SYSTEM_PROMPT, keyword, max_tokens=120, temperature=0.5)
@@ -150,7 +144,7 @@ def summarize_grid_activity(district: str, place_type_counts: list[tuple], sampl
     place_type_counts: [(地点类型, 条数), ...]，按条数降序
     sample_texts: 抽样的微博文本（已脱敏）
     """
-    if not DEEPSEEK_API_KEY:
+    if not settings.deepseek_api_key:
         return _mock_activity_summary(place_type_counts)
     context = {
         "district": district,

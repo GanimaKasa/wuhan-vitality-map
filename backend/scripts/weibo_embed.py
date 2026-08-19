@@ -5,14 +5,14 @@
 #  用SiliconFlow的embeddings API（https://api.siliconflow.cn/v1/embeddings，
 #  模型BAAI/bge-large-zh-v1.5，1024维），而不是本地跑sentence-transformers：
 #  一是本地GTX1650显存/内存有限跑大批量embedding容易OOM，二是查询时
-#  （app.py）也用同一个API算查询向量，两边必须用同一个模型服务保证
-#  向量空间完全一致——本地模型和远程API即便"模型名一样"，池化方式
-#  可能不同导致向量不可比（之前用HuggingFace免费推理API踩过这个坑）。
+#  （retrieval/weibo_search.py）也用同一个API算查询向量，两边必须用同一个
+#  模型服务保证向量空间完全一致——本地模型和远程API即便"模型名一样"，
+#  池化方式可能不同导致向量不可比（之前用HuggingFace免费推理API踩过这个坑）。
 #  SiliconFlow返回的是接口自己做好池化的向量，本地和远程都调这同一个
 #  接口，从根上避免不一致。
 #
 #  产出 weibo_embeddings.npy 的行序必须和 weibo_posts.json 的列表顺序
-#  完全一致，app.py按下标对齐两者。
+#  完全一致，检索时按下标对齐两者。
 #
 #  9.7万条文本分批调API，网络抖动/超时在所难免，支持断点续跑：每
 #  CHECKPOINT_EVERY个batch落一次盘，中途中断重新运行本脚本会自动从
@@ -28,7 +28,10 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+# scripts/weibo_embed.py -> 上一级是backend/，.env和data/都在backend/下——
+# 显式指定路径，不依赖"必须在backend/目录下手动跑这个脚本"这个隐式假设。
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
 
 MODEL_NAME = "BAAI/bge-large-zh-v1.5"
 API_URL = "https://api.siliconflow.cn/v1/embeddings"
@@ -37,8 +40,8 @@ BATCH_SIZE = 16  # 文档写最多32条，实测这个模型的非Pro版本32条
 CHECKPOINT_EVERY = 100  # 每100个batch（3200条）落一次盘
 MAX_WORKERS = 15  # 并发请求数，SiliconFlow免费额度1000次/分钟，留足余量
 
-POSTS_PATH = os.path.join(os.path.dirname(__file__), "data", "weibo_posts.json")
-OUT_PATH = os.path.join(os.path.dirname(__file__), "data", "weibo_embeddings.npy")
+POSTS_PATH = os.path.join(BACKEND_DIR, "data", "weibo_posts.json")
+OUT_PATH = os.path.join(BACKEND_DIR, "data", "weibo_embeddings.npy")
 CHECKPOINT_PATH = OUT_PATH + ".checkpoint.npy"
 PROGRESS_PATH = OUT_PATH + ".progress.txt"
 

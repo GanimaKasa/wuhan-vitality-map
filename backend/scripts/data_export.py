@@ -1,9 +1,13 @@
 # ==============================================================
 #  全量格网离线推理导出：对10011个格网跑一次模型前向，
 #  导出预测活力值(10维) + 8路sigmoid门控权重 + 经纬度/行政区/缺失标记
-#  产出 data/grid_data.geojson，供前端直接加载，避免每次请求都跑模型。
+#  产出 backend/data/grid_data.geojson，供前端直接加载，避免每次请求都跑模型。
 #  推理/门控hook写法复用 模型可视化展示/08_plot_gate_weights.py，
 #  还原量级写法复用 模型训练层/evaluate_nofin_clip.py。
+#
+#  这是离线一次性脚本，不是backend这个FastAPI应用运行时会用到的代码，
+#  所以放在scripts/而不是src/vitality_map/包里——依赖torch/geopandas这类
+#  部署镜像不需要的重依赖，只在本机手动跑。
 # ==============================================================
 
 import json
@@ -22,7 +26,9 @@ from model import VitalityModel, SEVEN_MODALITY_ORDER
 from road_graph import build_road_graph
 from modalities import get_gnn_raw_columns
 
-OUT_PATH = os.path.join(os.path.dirname(__file__), "data", "grid_data.geojson")
+# scripts/data_export.py -> 上一级是backend/，data/在backend/data/下
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT_PATH = os.path.join(BACKEND_DIR, "data", "grid_data.geojson")
 MODALITY_NAMES = SEVEN_MODALITY_ORDER + ["gnn"]
 MODALITY_ZH = ["poi", "road", "landuse", "nightlight", "sentinel2", "weibo", "streetview", "gnn"]
 WATER_RATIO_THRESHOLD = 0.5  # lu_ratio_Water_norm超过此值视为水域为主的格网，活力排名（尤其最低排名）应排除

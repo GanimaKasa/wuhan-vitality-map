@@ -16,7 +16,9 @@ from scipy.spatial import cKDTree
 
 MBLOGS_CSV = r"D:\毕业论文2\原始数据\微博数据\mblogs.csv"
 CENTROIDS_CSV = r"D:\毕业论文2\数据采集层\三环线250米\grid_centroids.csv"
-OUT_PATH = os.path.join(os.path.dirname(__file__), "data", "weibo_posts.json")
+# scripts/weibo_export.py -> 上一级是backend/，data/在backend/data/下
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT_PATH = os.path.join(BACKEND_DIR, "data", "weibo_posts.json")
 
 # 与前端HALF_LAT/HALF_LNG同源的格网间隔，取0.75倍作为"落在格网内"的匹配阈值
 GRID_SPACING_DEG = 0.00224578
