@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from vitality_map.agents import single_agent
+from vitality_map.agents.orchestrator import resume_orchestrator_stream, run_orchestrator_stream
 from vitality_map.core.rate_limit import check_rate_limit
 from vitality_map.retrieval import intent as retrieval
 from vitality_map.core.data import KNOWN_DISTRICTS
@@ -113,6 +114,26 @@ def chat(req: ChatRequest, request: Request):
     check_rate_limit(client_ip)
 
     def event_stream():
+        if req.agent_mode == "orchestrator":
+            # 模式B(LangGraph multi-agent)。前端还没有切换按钮，目前只能手动在
+            # 请求体里传agent_mode="orchestrator"测试。ask_user中途反问已经接了
+            # checkpointer(见agents/orchestrator/checkpointer.py)，pending_turn
+            # 这里只需要带thread_id——跟模式A(pending_turn带完整messages快照)
+            # 结构不同，是两套并存的机制，api层只是原样透传，不需要互相兼容。
+            if req.pending_turn:
+                thread_id = req.pending_turn.get("thread_id")
+                original_question = req.question or ""
+                for event in resume_orchestrator_stream(thread_id, req.reply or ""):
+                    event = _suppress_ungrounded_highlight(event, original_question)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                return
+
+            question = req.question or ""
+            for event in run_orchestrator_stream(question, history=req.history):
+                event = _suppress_ungrounded_highlight(event, question)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            return
+
         if req.pending_turn:
             # req.question在恢复场景下是前端透传回来的"这一整轮最初的问题"（不是这次
             # 回复的文字），用来做下面的活力关键词兜底检查——跟全新一轮走同一套判断。

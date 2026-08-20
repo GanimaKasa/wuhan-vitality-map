@@ -12,3 +12,9 @@ class ChatRequest(BaseModel):
     history: list[dict] | None = None
     pending_turn: dict | None = None
     reply: str | None = None
+    # "single"(默认，模式A单体ReAct agent) | "orchestrator"(模式B，LangGraph
+    # multi-agent)。前端切换按钮还没做，目前只能手动传这个字段测试模式B——见
+    # agents/orchestrator/包。orchestrator模式的pending_turn结构跟模式A不同：
+    # 只需要{"thread_id": str}（真checkpointer持久化了完整状态，不需要像模式A
+    # 那样客户端带回完整messages快照）。
+    agent_mode: str = "single"

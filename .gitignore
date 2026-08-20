@@ -5,6 +5,7 @@ __pycache__/
 *.log
 backend/data/*.checkpoint.npy
 backend/data/*.progress.txt
+backend/checkpoints.db*
 *.egg-info/
 .pytest_cache/
 .ruff_cache/

@@ -324,6 +324,7 @@ TOOL_DISPLAY_NAMES = {
     "search_weibo_hotspots": "检索微博热点",
     "web_search": "搜索网页",
     "geocode": "查询地点坐标",
+    "search_poi": "搜索地点",
     "plan_route_order": "规划访问顺序",
     "route_between": "查询路线",
 }

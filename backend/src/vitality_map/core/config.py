@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # 高德地图Web服务API：地理编码+路径规划。申请key时要选"Web服务"平台，
     # 不是"Web端(JS API)"。
     amap_geocode_url: str = "https://restapi.amap.com/v3/geocode/geo"
+    # POI搜索：有中心点(center_lng/lat)时用"周边搜索"，没有时用"关键字搜索"(city限定武汉)
+    amap_place_around_url: str = "https://restapi.amap.com/v3/place/around"
+    amap_place_text_url: str = "https://restapi.amap.com/v3/place/text"
     amap_direction_driving_url: str = "https://restapi.amap.com/v3/direction/driving"
     amap_direction_walking_url: str = "https://restapi.amap.com/v3/direction/walking"
     amap_direction_transit_url: str = "https://restapi.amap.com/v3/direction/transit/integrated"
@@ -97,6 +100,13 @@ class Settings(BaseSettings):
     # agent循环单轮最多跑几步，见agents/single_agent.py顶部注释里的调参记录
     # （8曾经够用，加了finish工具收尾后多占一轮预算，调到10）
     max_agent_steps: int = 10
+
+    # 模式B(multi-agent)的checkpointer持久化文件路径，只用来支撑ask_user中途
+    # 反问的暂停/恢复(跨越同一轮对话内的两次请求，不是长期存档)——不放进
+    # backend/data/(那是Git LFS托管的地图/微博数据集，语义不同)。本地开发用
+    # SQLite；部署到Render时这个文件在容器重启后会丢，属于已知限制(见项目记忆)，
+    # 生产环境要换成PostgresSaver才能真正扛住容器重启，用同一个环境变量切换。
+    checkpoint_db_path: str = str(BACKEND_DIR / "checkpoints.db")
 
 
 settings = Settings()
