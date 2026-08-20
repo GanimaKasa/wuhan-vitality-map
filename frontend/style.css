@@ -405,6 +405,19 @@ input[type="date"] { color-scheme: dark; }
   justify-content: center;
 }
 
+/* agent模式切换按钮带文字标签，比纯图标按钮(+/⚙️)宽，单独放宽 */
+.chat-icon-btn--wide {
+  width: auto;
+  padding: 0 10px;
+  gap: 4px;
+  font-size: 13px;
+}
+.chat-icon-btn--wide.orchestrator-mode {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
 .chat-memory-settings {
   display: flex;
   flex-direction: column;

@@ -741,11 +741,18 @@ function appendMessage(role, text) {
 // ==============================================================
 const CHAT_HISTORY_KEY = "vitalityMapChatHistory_v1";
 const CHAT_MAX_TURNS_KEY = "vitalityMapChatMaxTurns_v1";
+const CHAT_AGENT_MODE_KEY = "vitalityMapChatAgentMode_v1";
 const DEFAULT_MAX_CHAT_TURNS = 10;
 
 let chatHistory = loadChatHistory();       // [{question, answer}, ...]，已压缩的完整轮次
 let chatMaxTurns = loadChatMaxTurns();     // 最多保留几轮
-let chatPendingState = null;               // null | {pendingTurn, originalQuestion}——当前轮若卡在ask_user反问，存这里
+// "single"(默认，模式A单体ReAct agent) | "orchestrator"(模式B，LangGraph
+// multi-agent，实验性)。两种模式共用同一份chatHistory格式({question,answer})，
+// 切换模式不会让历史失效；pending_turn结构不同(模式A带完整消息快照，模式B只带
+// thread_id)，所以恢复时永远用暂停那一刻记下的agentMode，不看当前按钮状态，
+// 避免中途切换按钮导致这次恢复请求路由错agent。
+let chatAgentMode = loadChatAgentMode();
+let chatPendingState = null;               // null | {pendingTurn, originalQuestion, agentMode}——当前轮若卡在ask_user反问，存这里
 
 function loadChatHistory() {
   try {
@@ -777,6 +784,41 @@ function saveChatMaxTurns() {
   } catch {
     // 忽略
   }
+}
+
+function loadChatAgentMode() {
+  const raw = localStorage.getItem(CHAT_AGENT_MODE_KEY);
+  return raw === "orchestrator" ? "orchestrator" : "single";
+}
+
+function saveChatAgentMode() {
+  try {
+    localStorage.setItem(CHAT_AGENT_MODE_KEY, chatAgentMode);
+  } catch {
+    // 忽略
+  }
+}
+
+function updateAgentModeBtn() {
+  const btn = document.getElementById("chatAgentModeBtn");
+  if (!btn) return;
+  if (chatAgentMode === "orchestrator") {
+    btn.textContent = "🕸️ Multi-Agent";
+    btn.title = "当前：Multi-Agent模式（实验性，多个专职子agent协作）。点击切回标准模式";
+    btn.classList.add("orchestrator-mode");
+  } else {
+    btn.textContent = "🧩 标准模式";
+    btn.title = "当前：标准模式（单体agent）。点击切换到Multi-Agent模式（实验性）";
+    btn.classList.remove("orchestrator-mode");
+  }
+}
+
+function toggleAgentMode() {
+  chatAgentMode = chatAgentMode === "single" ? "orchestrator" : "single";
+  saveChatAgentMode();
+  updateAgentModeBtn();
+  const label = chatAgentMode === "orchestrator" ? "Multi-Agent模式（实验性）" : "标准模式";
+  appendMessage("bot", `已切换到${label}，下一句话开始生效。`);
 }
 
 function trimChatHistory() {
@@ -819,7 +861,7 @@ function startNewConversation() {
 // 每个工具调用步骤渲染成一个<details>，默认收起来只显示一行摘要，右边一个
 // 小箭头，点开能看到这次调用的参数+结果原始数据——参考Claude Code展示工具
 // 调用的方式，不想看细节的话聊天记录不会被塞满，想看的话点一下就有。
-function handleChatEvent(event, stepsBox, turnQuestion) {
+function handleChatEvent(event, stepsBox, turnQuestion, turnAgentMode) {
   const box = document.getElementById("chatMessages");
   if (event.type === "tool_call") {
     stepsBox.classList.remove("hidden");
@@ -853,7 +895,7 @@ function handleChatEvent(event, stepsBox, turnQuestion) {
     if (stepsBox.classList.contains("hidden")) stepsBox.remove();
     // 记下这次暂停的原始快照——不做任何加工，下次用户发消息时原样带回去，
     // 让后端从暂停的地方接着跑（借鉴LangGraph interrupt/resume的思路）。
-    chatPendingState = { pendingTurn: event.pending_turn, originalQuestion: turnQuestion };
+    chatPendingState = { pendingTurn: event.pending_turn, originalQuestion: turnQuestion, agentMode: turnAgentMode };
     appendMessage("bot", event.question);
     if (event.options && event.options.length) {
       const optionsRow = document.createElement("div");
@@ -929,9 +971,13 @@ async function sendChat() {
   // question字段在恢复场景下也带上这轮最初的问题（不是这次回复文字）——后端
   // 用它做"这轮问题有没有提活力相关词"的兜底判断，判断标准跟全新一轮保持一致。
   const isResuming = !!chatPendingState;
+  // 恢复时用暂停那一刻记下的agentMode(不是当前按钮状态)，防止用户在"被反问"和
+  // "回答"之间手滑切换了模式，导致这次恢复请求路由到跟暂停时不一致的agent。
+  const turnAgentMode = isResuming ? chatPendingState.agentMode : chatAgentMode;
   const requestBody = isResuming
-    ? { pending_turn: chatPendingState.pendingTurn, reply: text, question: chatPendingState.originalQuestion }
-    : { question: text, history: chatHistory };
+    ? { pending_turn: chatPendingState.pendingTurn, reply: text, question: chatPendingState.originalQuestion,
+        agent_mode: turnAgentMode }
+    : { question: text, history: chatHistory, agent_mode: turnAgentMode };
   const turnQuestion = isResuming ? chatPendingState.originalQuestion : text;
 
   try {
@@ -958,7 +1004,7 @@ async function sendChat() {
       buffer = parts.pop(); // 最后一段可能不完整（还没收全一个事件），留到下次拼接
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
-        handleChatEvent(JSON.parse(part.slice(6)), stepsBox, turnQuestion);
+        handleChatEvent(JSON.parse(part.slice(6)), stepsBox, turnQuestion, turnAgentMode);
       }
     }
   } catch {
@@ -1373,6 +1419,8 @@ async function main() {
     trimChatHistory();
     saveChatHistory();
   });
+  document.getElementById("chatAgentModeBtn").addEventListener("click", toggleAgentMode);
+  updateAgentModeBtn();
 
   renderChatHistoryOrWelcome();
 }

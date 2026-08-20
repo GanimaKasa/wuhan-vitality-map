@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.css" />
-<link rel="stylesheet" href="style.css?v=15" />
+<link rel="stylesheet" href="style.css?v=16" />
 </head>
 <body>
 <div id="app">
@@ -145,6 +145,7 @@
             <div class="chat-toolbar">
               <button id="chatNewConversationBtn" class="chat-icon-btn" title="新建对话">+</button>
               <button id="chatMemorySettingsBtn" class="chat-icon-btn" title="记忆设置">⚙️</button>
+              <button id="chatAgentModeBtn" class="chat-icon-btn chat-icon-btn--wide" title="切换到Multi-Agent模式（实验性）">🧩 标准模式</button>
             </div>
             <div id="chatMemorySettingsPanel" class="chat-memory-settings hidden">
               <label for="chatMaxTurnsInput">最多记住最近几轮问答</label>
@@ -173,6 +174,6 @@
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/deck.gl@^9.0.0/dist.min.js"></script>
-<script src="app.js?v=27"></script>
+<script src="app.js?v=28"></script>
 </body>
 </html>
