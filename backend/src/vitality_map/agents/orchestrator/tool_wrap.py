@@ -51,19 +51,24 @@ def emit_tool_call(tool_name: str, args: dict) -> None:
     writer({"type": "tool_call", "tool": tool_name, "label": label, "args": args})
 
 
-def build_command(tool_name: str, result: dict, tool_call_id: str) -> Command:
+def build_command(tool_name: str, result: dict, tool_call_id: str, extra_update: dict | None = None) -> Command:
     """执行后打包结果：既发"调用结果"流式信号给前端展示，也用Command双通道
-    把结果写回state（文字给模型看+markers/polylines/seen_grid_ids绕过LLM）。"""
+    把结果写回state（文字给模型看+markers/polylines/seen_grid_ids绕过LLM）。
+    extra_update是额外要合并进state的字段(目前只有route_tools.py的geocode/
+    search_poi用来写poi_cache，见state.py)。"""
     visible = _visible(result)
     label = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
     get_stream_writer()({"type": "tool_result", "tool": tool_name, "label": label, "result": visible})
 
     features = extract_map_features(tool_name, result) or {}
-    return Command(update={
+    update = {
         "markers": features.get("markers", []),
         "polylines": features.get("polylines", []),
         "seen_grid_ids": features.get("seen_grid_ids", []),
         "messages": [
             ToolMessage(content=json.dumps(visible, ensure_ascii=False), tool_call_id=tool_call_id)
         ],
-    })
+    }
+    if extra_update:
+        update.update(extra_update)
+    return Command(update=update)

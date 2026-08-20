@@ -59,11 +59,15 @@ def _bubble_up(subagent_final_state: dict, tool_call_id: str) -> Command:
         "markers": subagent_final_state.get("markers", []),
         "polylines": subagent_final_state.get("polylines", []),
         "seen_grid_ids": subagent_final_state.get("seen_grid_ids", []),
+        # 子agent这一轮新查到的poi_cache条目合并回Orchestrator，供下一次委派
+        # (哪怕是全新的子agent线程)复用，避免跨委派重复搜索同一个地标/地名——
+        # 见state.py顶部注释里2026-08-19真实反馈过的"重复搜索"问题。
+        "poi_cache": subagent_final_state.get("poi_cache", {}),
         "messages": [ToolMessage(content=summary, tool_call_id=tool_call_id)],
     })
 
 
-def _run_subagent_and_relay(subagent, task: str, sub_thread_id: str) -> dict:
+def _run_subagent_and_relay(subagent, task: str, sub_thread_id: str, initial_poi_cache: dict) -> dict:
     """跑子agent，用stream(stream_mode=["custom","values"])而不是invoke()——
     自定义流式信号(子agent内部工具emit_tool_call/build_command发的
     tool_call/tool_result)不会自动冒泡穿过嵌套的子图调用(真实测试验证过，
@@ -79,11 +83,14 @@ def _run_subagent_and_relay(subagent, task: str, sub_thread_id: str) -> dict:
     config = {"configurable": {"thread_id": sub_thread_id}}
     existing = subagent.get_state(config)
     # original_question是"长期记忆"锚点(见state.py/prompts.py)，子agent这里存的
-    # 是Orchestrator委派下来的task原文——只在全新任务时设置一次，恢复(input_=None)
-    # 时不重新传，state里已经有了，不用再设一遍。
+    # 是Orchestrator委派下来的task原文；poi_cache是Orchestrator这一轮已经攒下的
+    # 缓存(见_bubble_up)，全新子agent线程一开始就带上，不用从零发现已经查过的
+    # 地标——都只在全新任务时设置一次，恢复(input_=None)时不重新传，state里已经
+    # 有了，不用再设一遍。
     input_ = None if existing.values.get("messages") else {
         "messages": [HumanMessage(content=task)],
         "original_question": task,
+        "poi_cache": initial_poi_cache,
     }
 
     outer_writer = get_stream_writer()
@@ -124,7 +131,8 @@ def delegate_to_info_agent(task: str, runtime: ToolRuntime):
     """把日历/天气/城市活力/微博热点/开放性网页信息类任务委派给信息查询子agent。
     task要写清楚具体要查什么(含必要的日期/地点等上下文)，子agent看不到你和用户的
     完整对话历史。"""
-    final_state = _run_subagent_and_relay(_get_info_subagent(), task, _derive_sub_thread_id(runtime))
+    poi_cache = runtime.state.get("poi_cache") or {}
+    final_state = _run_subagent_and_relay(_get_info_subagent(), task, _derive_sub_thread_id(runtime), poi_cache)
     return _bubble_up(final_state, runtime.tool_call_id)
 
 
@@ -132,5 +140,6 @@ def delegate_to_info_agent(task: str, runtime: ToolRuntime):
 def delegate_to_route_agent(task: str, runtime: ToolRuntime):
     """把地点查询/打卡点发现/路线规划类任务委派给路线子agent。task要写清楚具体
     要查什么(含必要的地名/出行方式等上下文)，子agent看不到你和用户的完整对话历史。"""
-    final_state = _run_subagent_and_relay(_get_route_subagent(), task, _derive_sub_thread_id(runtime))
+    poi_cache = runtime.state.get("poi_cache") or {}
+    final_state = _run_subagent_and_relay(_get_route_subagent(), task, _derive_sub_thread_id(runtime), poi_cache)
     return _bubble_up(final_state, runtime.tool_call_id)
