@@ -21,6 +21,20 @@ def _parse_amap_polyline(polyline_str: str) -> list[list[float]]:
     return points
 
 
+def _extract_name(field) -> str | None:
+    """高德transit接口的entrance/exit字段文档写的是单个对象{"name":...}，但真实
+    调用中(2026-08-20线上复现过一次崩溃)有时会返回一个列表——本地复现确认过
+    seg["exit"]是list时对它调.get()直接AttributeError，把整条SSE流冲垮(模式B
+    没有像模式A那样给每个工具调用包try/except，异常会一路网上传，见
+    orchestrator/tool_wrap.py的修复)。这里防御式地兼容dict/list两种真实出现过
+    的形状，都取不到就返回None。"""
+    if isinstance(field, dict):
+        return field.get("name")
+    if isinstance(field, list) and field and isinstance(field[0], dict):
+        return field[0].get("name")
+    return None
+
+
 def tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, dest_lat: float,
                         mode: str = "driving") -> dict:
     """
@@ -93,10 +107,12 @@ def tool_route_between(origin_lng: float, origin_lat: float, dest_lng: float, de
                 "from_stop": line.get("departure_stop", {}).get("name"),
                 "to_stop": line.get("arrival_stop", {}).get("name"),
             }
-            if seg.get("entrance", {}).get("name"):
-                entry["entrance"] = seg["entrance"]["name"]
-            if seg.get("exit", {}).get("name"):
-                entry["exit"] = seg["exit"]["name"]
+            entrance_name = _extract_name(seg.get("entrance"))
+            if entrance_name:
+                entry["entrance"] = entrance_name
+            exit_name = _extract_name(seg.get("exit"))
+            if exit_name:
+                entry["exit"] = exit_name
             segments.append(entry)
             if line.get("polyline"):
                 polyline.extend(_parse_amap_polyline(line["polyline"]))

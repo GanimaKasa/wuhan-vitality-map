@@ -5,7 +5,7 @@
 
 from langchain.tools import ToolRuntime, tool
 
-from vitality_map.agents.orchestrator.tool_wrap import build_command, emit_tool_call
+from vitality_map.agents.orchestrator.tool_wrap import build_command, emit_tool_call, safe_call
 from vitality_map.tools.geocode import tool_geocode, tool_search_poi
 from vitality_map.tools.routing import tool_plan_route_order, tool_route_between
 
@@ -15,7 +15,8 @@ def geocode(address: str, runtime: ToolRuntime):
     """把一个地名转成精确经纬度坐标（武汉范围内），地名不够精确时查不到会报错，
     换个更常见的说法再试。"""
     emit_tool_call("geocode", {"address": address})
-    return build_command("geocode", tool_geocode(address=address), runtime.tool_call_id)
+    result = safe_call(tool_geocode, address=address)
+    return build_command("geocode", result, runtime.tool_call_id)
 
 
 @tool
@@ -26,8 +27,8 @@ def search_poi(keyword: str, runtime: ToolRuntime, center_lng: float | None = No
     args = {"keyword": keyword, "center_lng": center_lng, "center_lat": center_lat,
             "radius": radius, "top_n": top_n}
     emit_tool_call("search_poi", args)
-    result = tool_search_poi(keyword=keyword, center_lng=center_lng, center_lat=center_lat,
-                              radius=radius, top_n=top_n)
+    result = safe_call(tool_search_poi, keyword=keyword, center_lng=center_lng, center_lat=center_lat,
+                        radius=radius, top_n=top_n)
     return build_command("search_poi", result, runtime.tool_call_id)
 
 
@@ -36,7 +37,7 @@ def plan_route_order(points: list[dict], runtime: ToolRuntime):
     """给多个候选打卡点排一个访问顺序（按直线距离最优排序，不是精确路网距离）。
     points每项要有name/lng/lat三个字段。"""
     emit_tool_call("plan_route_order", {"points": points})
-    result = tool_plan_route_order(points=points)
+    result = safe_call(tool_plan_route_order, points=points)
     return build_command("plan_route_order", result, runtime.tool_call_id)
 
 
@@ -48,8 +49,8 @@ def route_between(origin_lng: float, origin_lat: float, dest_lng: float, dest_la
     args = {"origin_lng": origin_lng, "origin_lat": origin_lat, "dest_lng": dest_lng,
             "dest_lat": dest_lat, "mode": mode}
     emit_tool_call("route_between", args)
-    result = tool_route_between(origin_lng=origin_lng, origin_lat=origin_lat,
-                                 dest_lng=dest_lng, dest_lat=dest_lat, mode=mode)
+    result = safe_call(tool_route_between, origin_lng=origin_lng, origin_lat=origin_lat,
+                        dest_lng=dest_lng, dest_lat=dest_lat, mode=mode)
     return build_command("route_between", result, runtime.tool_call_id)
 
 

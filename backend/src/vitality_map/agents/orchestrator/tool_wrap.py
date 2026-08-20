@@ -27,6 +27,20 @@ def _visible(result: dict) -> dict:
     return {k: v for k, v in result.items() if not k.startswith("_")}
 
 
+def safe_call(impl, **kwargs) -> dict:
+    """跟模式A(single_agent.run_agent_stream的try/except impl(**args))同样的
+    容错：真实生产事故(2026-08-20)确认过，模式B原来直接调impl(**kwargs)，一旦
+    工具内部抛异常(这次是tools/routing.py的一个真实bug)，异常会一路网上传穿过
+    子agent→委派工具→Orchestrator，把整条SSE流冲垮——FastAPI的StreamingResponse
+    生成器一旦抛异常就静默关闭连接，前端永远收不到final事件，卡在最后一步的
+    "正在..."状态出不来。现在统一在这里兜底，工具异常转成{"error":...}结果，
+    模型能看到报错、可以换个思路继续，不会让整轮对话彻底死掉。"""
+    try:
+        return impl(**kwargs)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def emit_tool_call(tool_name: str, args: dict) -> None:
     """执行前发一个"开始调用"信号，用get_stream_writer()——真实调用验证过：
     直接写在子agent自己的StateGraph执行上下文里能被subagent.stream()正常收到，
