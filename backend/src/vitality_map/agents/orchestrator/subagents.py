@@ -17,6 +17,7 @@
 # ==============================================================
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 from langchain.messages import HumanMessage, ToolMessage
 from langchain.tools import ToolRuntime, tool
 from langgraph.config import get_stream_writer
@@ -25,21 +26,28 @@ from langgraph.types import Command
 from vitality_map.agents.orchestrator.checkpointer import get_checkpointer
 from vitality_map.agents.orchestrator.info_tools import INFO_TOOLS
 from vitality_map.agents.orchestrator.llm import get_deepseek_chat_model
-from vitality_map.agents.orchestrator.prompts import INFO_AGENT_SYSTEM_PROMPT, ROUTE_AGENT_SYSTEM_PROMPT
+from vitality_map.agents.orchestrator.prompts import info_agent_prompt, route_agent_prompt
 from vitality_map.agents.orchestrator.route_tools import ROUTE_TOOLS
 from vitality_map.agents.orchestrator.state import OrchestratorState
 
 
-def _build_subagent(system_prompt: str, tools: list):
+def _build_subagent(dynamic_prompt_middleware, tools: list):
     # 子agent也接同一个checkpointer单例——2026-08-20真实测试验证过：如果不接，
     # Orchestrator进程崩溃在"子agent执行到一半"这个时间点，子agent自己已经跑完
     # 的那些工具调用完全没有留痕，恢复后delegate工具会被Orchestrator的checkpoint
     # 重放，子agent从零开始重跑全部步骤——现有工具都是只读查询，重跑不会导致
     # 数据错乱，但"精准恢复不重复劳动"这层保证是缺失的，是真实验证出来的bug。
+    #
+    # 也接SummarizationMiddleware("中期记忆")——像"推荐8个打卡点"这类问题，
+    # 子agent自己可能连续调十几次search_poi/geocode，消息历史一样会堆积。
     return create_agent(
         model=get_deepseek_chat_model(),
         tools=tools,
-        system_prompt=system_prompt,
+        middleware=[
+            SummarizationMiddleware(model=get_deepseek_chat_model(), trigger=("tokens", 6000),
+                                     keep=("messages", 12)),
+            dynamic_prompt_middleware,
+        ],
         state_schema=OrchestratorState,
         checkpointer=get_checkpointer(),
     )
@@ -70,7 +78,13 @@ def _run_subagent_and_relay(subagent, task: str, sub_thread_id: str) -> dict:
     state，有就传None表示"从checkpoint继续"，没有就传全新的任务消息。"""
     config = {"configurable": {"thread_id": sub_thread_id}}
     existing = subagent.get_state(config)
-    input_ = None if existing.values.get("messages") else {"messages": [HumanMessage(content=task)]}
+    # original_question是"长期记忆"锚点(见state.py/prompts.py)，子agent这里存的
+    # 是Orchestrator委派下来的task原文——只在全新任务时设置一次，恢复(input_=None)
+    # 时不重新传，state里已经有了，不用再设一遍。
+    input_ = None if existing.values.get("messages") else {
+        "messages": [HumanMessage(content=task)],
+        "original_question": task,
+    }
 
     outer_writer = get_stream_writer()
     final_state = None
@@ -89,14 +103,14 @@ _route_subagent = None
 def _get_info_subagent():
     global _info_subagent
     if _info_subagent is None:
-        _info_subagent = _build_subagent(INFO_AGENT_SYSTEM_PROMPT, INFO_TOOLS)
+        _info_subagent = _build_subagent(info_agent_prompt, INFO_TOOLS)
     return _info_subagent
 
 
 def _get_route_subagent():
     global _route_subagent
     if _route_subagent is None:
-        _route_subagent = _build_subagent(ROUTE_AGENT_SYSTEM_PROMPT, ROUTE_TOOLS)
+        _route_subagent = _build_subagent(route_agent_prompt, ROUTE_TOOLS)
     return _route_subagent
 
 

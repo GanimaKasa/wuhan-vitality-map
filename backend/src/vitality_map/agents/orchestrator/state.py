@@ -30,3 +30,10 @@ class OrchestratorState(AgentState):
     seen_grid_ids: Annotated[list[int], _union_grid_ids]
     # finish工具(return_direct=True)写入，api层读出来作为这一轮最终结果
     highlight_grid_ids: list[int]
+    # "长期记忆"锚点：Orchestrator=用户最初的问题，子agent=Orchestrator委派的task
+    # 原文。故意不放进messages里——SummarizationMiddleware(见graph.py/subagents.py)
+    # 只会摘要messages，这个字段完全不受影响，靠prompts.py里的dynamic_prompt钩子
+    # 每次模型调用前都显式塞回系统提示词。真实测试验证过(见项目记忆)：哪怕messages
+    # 已经被摘要替换、原始问题的文字被压缩没了，模型依然能通过这个字段准确复述
+    # 最初的任务目标，不会像"无差别历史截断"那样把任务目标弄丢。
+    original_question: str

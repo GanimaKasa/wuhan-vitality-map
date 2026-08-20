@@ -23,7 +23,7 @@ from langgraph.types import Command
 from vitality_map.agents.orchestrator.graph import build_orchestrator
 
 
-def _build_messages(question: str, history: list[dict] | None):
+def _build_input(question: str, history: list[dict] | None) -> dict:
     messages = []
     for turn in (history or []):
         q, a = turn.get("question"), turn.get("answer")
@@ -31,7 +31,10 @@ def _build_messages(question: str, history: list[dict] | None):
             messages.append({"role": "user", "content": q})
             messages.append({"role": "assistant", "content": a})
     messages.append(HumanMessage(content=question))
-    return messages
+    # original_question是"长期记忆"锚点(见state.py/prompts.py)：只存这次的
+    # question(不含history)——历史轮次已经是压缩过的问答对，"这一轮真正要解决
+    # 的问题"就是question本身，不需要把历史也塞进这个锚点字段。
+    return {"messages": messages, "original_question": question}
 
 
 def _drive_stream(orchestrator, thread_id: str, input_):
@@ -74,8 +77,7 @@ def run_orchestrator(question: str, history: list[dict] | None = None) -> dict:
     只用于快速验证，正式走流式接口）。"""
     orchestrator = build_orchestrator()
     thread_id = str(uuid.uuid4())
-    events = list(_drive_stream(orchestrator, thread_id,
-                                 {"messages": _build_messages(question, history)}))
+    events = list(_drive_stream(orchestrator, thread_id, _build_input(question, history)))
     return events[-1]
 
 
@@ -84,7 +86,7 @@ def run_orchestrator_stream(question: str, history: list[dict] | None = None):
     run_agent_stream(question=..., history=...)对应。"""
     orchestrator = build_orchestrator()
     thread_id = str(uuid.uuid4())
-    yield from _drive_stream(orchestrator, thread_id, {"messages": _build_messages(question, history)})
+    yield from _drive_stream(orchestrator, thread_id, _build_input(question, history))
 
 
 def resume_orchestrator_stream(thread_id: str, reply: str):

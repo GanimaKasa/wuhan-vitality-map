@@ -2,16 +2,35 @@
 #  三个agent(Orchestrator+2个子agent)各自的system prompt。内容上尽量沿用
 #  模式A(single_agent.py的AGENT_SYSTEM_PROMPT_TEMPLATE)里已经调试验证过的
 #  具体指导(天气超范围怎么办、路线三件套怎么配合)，按领域拆分，不重新发明。
+#
+#  三个agent都用dynamic_prompt中间件(不是静态system_prompt字符串)构建最终
+#  提示词，两个原因：①每次调用都要拿到当天最新日期，跟静态字符串"构建一次
+#  缓存住"会导致日期冻结的坑不兼容(见graph.py的历史注释) ②要把state里的
+#  original_question字段(见state.py，"长期记忆"锚点)显式塞进去——这个字段
+#  故意不放在messages里，不受SummarizationMiddleware摘要影响，真实测试
+#  验证过(见项目记忆)：哪怕messages已经被摘要替换掉了，模型依然能通过这里
+#  拼进提示词的原文准确复述最初的任务目标，不会像"无差别历史截断"那样把
+#  任务目标弄丢。
 # ==============================================================
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def today_str() -> str:
     return datetime.now(SHANGHAI_TZ).date().isoformat()
+
+
+GOAL_ANCHOR_TEMPLATE = """
+
+【任务目标锚点——历史消息可能已经被自动摘要压缩过，但这句话每次都原样重新拼入，不会丢】
+{label}：{original}
+不管中途查了/聊了多少轮，最终都要紧扣这个目标，不要因为历史被压缩过就忘了最初要解决
+什么问题。"""
 
 
 INFO_AGENT_SYSTEM_PROMPT = """你是"武汉城市活力地图"网站的信息查询子agent，被Orchestrator委派处理
@@ -98,3 +117,26 @@ ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE = """你是"武汉城市活力地图"网站�
 要求：
 - 先想清楚需要委派哪些任务再行动，不要瞎委派不相关的任务
 - 不要说你是AI，不需要开场白"""
+
+
+def _with_goal_anchor(base: str, request: ModelRequest, label: str) -> str:
+    original = request.state.get("original_question")
+    if not original:
+        return base
+    return base + GOAL_ANCHOR_TEMPLATE.format(label=label, original=original)
+
+
+@dynamic_prompt
+def orchestrator_prompt(request: ModelRequest) -> str:
+    base = ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE.format(today=today_str())
+    return _with_goal_anchor(base, request, "用户最初的问题")
+
+
+@dynamic_prompt
+def info_agent_prompt(request: ModelRequest) -> str:
+    return _with_goal_anchor(INFO_AGENT_SYSTEM_PROMPT, request, "Orchestrator委派的任务")
+
+
+@dynamic_prompt
+def route_agent_prompt(request: ModelRequest) -> str:
+    return _with_goal_anchor(ROUTE_AGENT_SYSTEM_PROMPT, request, "Orchestrator委派的任务")
